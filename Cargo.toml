@@ -1,0 +1,22 @@
+    [package]
+    name = "gha-indie-worker-web-server"
+    version = "0.1.0"
+    edition = "2021"
+    license = "MIT"
+    description = "MASH web server for GHA Indie Worker"
+    repository = "https://github.com/gha-indie-worker/gha-indie-worker-web-server.rs"
+
+    [features]
+    default = ["tcp-transport", "nats-transport"]
+    tcp-transport = []
+    nats-transport = []
+
+    [dependencies]
+    serde = { version = "1", features = ["derive"] }
+    serde_json = "1"
+    thiserror = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+
