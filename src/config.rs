@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use crate::env_map::{value, EnvMap};
+
 #[derive(Clone, Debug)]
 pub struct WebConfig {
     pub bind: String,
@@ -8,12 +10,17 @@ pub struct WebConfig {
 }
 
 impl WebConfig {
-    pub fn from_env() -> Self {
+    pub fn from_env_map(env: &EnvMap) -> Self {
         Self {
-            bind: std::env::var("GHA_INDIE_WORKER_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:8081".into()),
-            api_http_base: std::env::var("GHA_INDIE_WORKER_API_HTTP_BASE").ok(),
-            database_url: std::env::var("GHA_INDIE_WORKER_DATABASE_URL").ok(),
+            bind: value(env, "GHA_INDIE_WORKER_WEB_BIND")
+                .unwrap_or("127.0.0.1:8081")
+                .to_owned(),
+            api_http_base: value(env, "GHA_INDIE_WORKER_API_HTTP_BASE").map(str::to_owned),
+            database_url: value(env, "GHA_INDIE_WORKER_DATABASE_URL").map(str::to_owned),
         }
     }
-}
 
+    pub fn from_env() -> Self {
+        Self::from_env_map(&std::env::vars().collect())
+    }
+}

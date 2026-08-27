@@ -7,4 +7,3 @@ pub fn run(config: &WebConfig) {
     println!("web bind {}", config.bind);
     println!("{}", pages::home::markup());
 }
-

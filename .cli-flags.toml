@@ -1,17 +1,24 @@
-# flags-2-env surface for `ghaiw-web`
-[flags.config]
-env = "GHA_INDIE_WORKER_CONFIG"
-long = "config"
-help = "Path to TOML configuration"
+[help]
+url = "https://github.com/gha-indie-worker/gha-indie-worker-web-server.rs"
 
-[flags.api_base]
-env = "GHA_INDIE_WORKER_API_BASE"
-long = "api-base"
-help = "API HTTP base URL"
+[parse]
+allow_unknown = false
 
-[flags.json]
-env = "GHA_INDIE_WORKER_JSON"
-long = "json"
-switch = true
-help = "Emit JSON"
+[flags.bind]
+env = "GHA_INDIE_WORKER_WEB_BIND"
+aliases = ["bind"]
+type = "string"
+default = "127.0.0.1:8081"
+help = "HTTP bind address."
 
+[flags.api-http-base]
+env = "GHA_INDIE_WORKER_API_HTTP_BASE"
+aliases = ["api-http-base"]
+type = "string"
+help = "API HTTP base URL."
+
+[flags.database-url]
+env = "GHA_INDIE_WORKER_DATABASE_URL"
+aliases = ["database-url"]
+type = "string"
+help = "Optional database URL for direct reads."
