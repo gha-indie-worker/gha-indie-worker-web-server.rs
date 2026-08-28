@@ -15,3 +15,21 @@ long = "json"
 switch = true
 help = "Emit JSON"
 
+
+[flags.gha-indie-worker-api-http-base]
+env = "GHA_INDIE_WORKER_API_HTTP_BASE"
+long = "gha-indie-worker-api-http-base"
+type = "string"
+help = "Runtime environment key GHA_INDIE_WORKER_API_HTTP_BASE."
+
+[flags.gha-indie-worker-database-url]
+env = "GHA_INDIE_WORKER_DATABASE_URL"
+long = "gha-indie-worker-database-url"
+type = "string"
+help = "Runtime environment key GHA_INDIE_WORKER_DATABASE_URL."
+
+[flags.gha-indie-worker-web-bind]
+env = "GHA_INDIE_WORKER_WEB_BIND"
+long = "gha-indie-worker-web-bind"
+type = "string"
+help = "Runtime environment key GHA_INDIE_WORKER_WEB_BIND."
