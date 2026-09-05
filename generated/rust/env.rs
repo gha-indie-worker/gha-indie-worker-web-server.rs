@@ -5,6 +5,7 @@ pub const API_BASE: &str = "GHA_INDIE_WORKER_API_BASE";
 pub const CONFIG: &str = "GHA_INDIE_WORKER_CONFIG";
 pub const GHA_INDIE_WORKER_API_HTTP_BASE: &str = "GHA_INDIE_WORKER_API_HTTP_BASE";
 pub const GHA_INDIE_WORKER_DATABASE_URL: &str = "GHA_INDIE_WORKER_DATABASE_URL";
+pub const GHA_INDIE_WORKER_NATS_URL: &str = "GHA_INDIE_WORKER_NATS_URL";
 pub const GHA_INDIE_WORKER_WEB_BIND: &str = "GHA_INDIE_WORKER_WEB_BIND";
 pub const JSON: &str = "GHA_INDIE_WORKER_JSON";
 
@@ -18,6 +19,8 @@ pub struct CliEnv {
     pub gha_indie_worker_api_http_base: &'static str,
     /// Runtime environment key GHA_INDIE_WORKER_DATABASE_URL.
     pub gha_indie_worker_database_url: &'static str,
+    /// NATS broker URL. Credentials stay in the environment or secret store, never as CLI flags.
+    pub gha_indie_worker_nats_url: &'static str,
     /// Runtime environment key GHA_INDIE_WORKER_WEB_BIND.
     pub gha_indie_worker_web_bind: &'static str,
     /// Emit JSON
@@ -30,6 +33,7 @@ impl CliEnv {
         config: CONFIG,
         gha_indie_worker_api_http_base: GHA_INDIE_WORKER_API_HTTP_BASE,
         gha_indie_worker_database_url: GHA_INDIE_WORKER_DATABASE_URL,
+        gha_indie_worker_nats_url: GHA_INDIE_WORKER_NATS_URL,
         gha_indie_worker_web_bind: GHA_INDIE_WORKER_WEB_BIND,
         json: JSON,
     };
