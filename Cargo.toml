@@ -1,22 +1,72 @@
-    [package]
-    name = "gha-indie-worker-web-server"
-    version = "0.1.0"
-    edition = "2021"
-    license = "MIT"
-    description = "MASH web server for GHA Indie Worker"
-    repository = "https://github.com/gha-indie-worker/gha-indie-worker-web-server.rs"
+[package]
+name = "gha-indie-worker-web-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+description = "MASH (maud + axum + SeaORM + htmx) host-routed web server for GHA Indie Worker (indiebuild.dev)"
+repository = "https://github.com/gha-indie-worker/gha-indie-worker-web-server.rs"
+default-run = "gha-indie-worker-web-server"
 
-    [features]
-    default = ["tcp-transport", "nats-transport"]
-    tcp-transport = []
-    nats-transport = []
+[lib]
+name = "gha_indie_worker_web_server"
+path = "src/lib.rs"
 
-    [dependencies]
-    serde = { version = "1", features = ["derive"] }
-    serde_json = "1"
-    thiserror = "2"
+[[bin]]
+name = "gha-indie-worker-web-server"
+path = "src/main.rs"
+
+[features]
+default = ["db", "ws-relay", "tcp-transport", "nats-transport"]
+# Read-only SeaORM access to the canonical database (DATABASE_URL_CANONICAL).
+db = ["dep:sea-orm"]
+# WebSocket relay from this server's /ws to the api-server's /v1/ws.
+ws-relay = ["dep:tokio-tungstenite"]
+# Stateful length-prefixed JSON TCP avenue.
+tcp-transport = []
+# NATS/JetStream avenue (subject algebra + envelopes; the async-nats client is
+# wired in the api-server bundle, this crate only publishes through it).
+nats-transport = []
+# Leptos/Dioxus islands loaded through ores-web-loader. OFF by default so the
+# server builds without a wasm toolchain; ui::loader still emits the loader tags.
+islands = []
+# Distributed (Redis) authority for the rate limiter.
+rate-limit-redis = ["ores-rl-lib-core/redis-backend"]
+
+[dependencies]
+axum = { version = "0.8", features = ["macros", "ws"] }
+futures-util = "0.3"
+hmac = "0.12"
+jsonwebtoken = "9"
+maud = { version = "0.27", features = ["axum"] }
+next-loggers = { package = "oresoftware-next-loggers", git = "https://github.com/ores-otel/ores.otel.log.git", rev = "b55271c047be761c4711d87cbd500a49eefda3d9" }
+ores-middleware = { git = "https://github.com/ORESoftware/ores-middleware", rev = "6f73bf1ae97f38f05e2e87e4eb3e0e18e0142529", features = ["axum", "compression"] }
+ores-rl-lib-core = { git = "https://github.com/ores-rate-limit/ores-rl-lib-core", tag = "v0.2.0", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sea-orm = { version = "2.0.0", optional = true, default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-postgres", "with-json", "with-uuid", "with-time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+shared-auth-client = { git = "https://github.com/shared-auth/shared-auth-clients", rev = "cc57a85b276bee81ad94decc87df2f48d49cab9f", package = "shared-auth-client" }
+subtle = "2"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time", "io-util"] }
+tokio-tungstenite = { version = "0.24", optional = true, features = ["rustls-tls-webpki-roots"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "request-id", "sensitive-headers", "timeout", "compression-full", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1", features = ["serde", "v4", "v7"] }
+
+# gha-indie-worker-orm-core owns the generated SeaORM entities for the canonical
+# schema. It is a private repository that does not exist yet; src/data/rows.rs
+# holds the identical column projections in the meantime. Flip this on (and add
+# `orm-core = ["dep:gha-indie-worker-orm-core"]` to [features]) once it exists.
+# gha-indie-worker-orm-core = { git = "https://github.com/gha-indie-worker/gha-indie-worker-orm-core", optional = true }
+
+[dev-dependencies]
+http-body-util = "0.1"
 
 [lints.rust]
 unsafe_code = "forbid"
-
-

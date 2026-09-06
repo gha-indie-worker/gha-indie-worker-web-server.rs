@@ -1,0 +1,163 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      # The fleet crates are private git dependencies.
+      - name: Authenticate private git dependencies
+        env:
+          GH_TOKEN: ${{ secrets.SHARED_AUTH_READ_TOKEN }}
+        run: |
+          if [ -n "${GH_TOKEN}" ]; then
+            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked --all-targets
+
+      # The server must still build for a deployment with no canonical pool and
+      # no websocket relay, so those features cannot become load-bearing.
+      - name: Build without optional avenues
+        run: cargo check --locked --no-default-features
+
+      - name: Build with islands
+        run: cargo check --locked --features islands
+
+      - name: Documentation
+        run: cargo doc --locked --no-deps
+
+  assets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Vendor browser assets
+        run: scripts/vendor-assets.sh
+
+      - name: Vendoring is idempotent
+        run: |
+          set -euo pipefail
+          before="$(sha256sum assets/vendor/htmx.min.js | cut -d' ' -f1)"
+          scripts/vendor-assets.sh
+          after="$(sha256sum assets/vendor/htmx.min.js | cut -d' ' -f1)"
+          test "$before" = "$after"
+
+      - name: No third-party origin is referenced from a page
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys
+
+          # Vendored assets are exempt; source is not.
+          offenders = []
+          allowed = {"https://github.com/gha-indie-worker", "https://unpkg.com"}
+          pattern = re.compile(r'(?:src|href)\s*=\s*\(?"?(https?://[^")\s]+)')
+          for path in pathlib.Path("src").rglob("*.rs"):
+              for match in pattern.finditer(path.read_text()):
+                  url = match.group(1)
+                  if not any(url.startswith(prefix) for prefix in allowed):
+                      offenders.append(f"{path}: {url}")
+          if offenders:
+              print("\n".join(offenders))
+              sys.exit("a page references a third-party origin")
+          PY
+
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Configuration keys are declared in .cli-flags.toml
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys, tomllib
+
+          declared = set()
+          flags = tomllib.loads(pathlib.Path(".cli-flags.toml").read_text())["flags"]
+          for flag in flags.values():
+              if "env" in flag:
+                  declared.add(flag["env"])
+
+          # Keys the server reads that belong to another crate's contract.
+          external = {
+              "PORT", "RUST_LOG", "APP_ENV",
+              "ORES_MIDDLEWARE_ENV", "ORES_MIDDLEWARE_RATE_LIMIT_HMAC_SECRET",
+              "GHA_INDIE_WORKER_DATABASE_URL_CANONICAL",
+          }
+
+          used = set()
+          for path in pathlib.Path("src").rglob("*.rs"):
+              used.update(re.findall(r'var\("([A-Z0-9_]+)"\)', path.read_text()))
+              used.update(re.findall(r'env::var\("([A-Z0-9_]+)"\)', path.read_text()))
+              used.update(re.findall(r'std::env::var\("([A-Z0-9_]+)"\)', path.read_text()))
+
+          missing = sorted(used - declared - external)
+          if missing:
+              sys.exit("undeclared configuration keys: " + ", ".join(missing))
+          PY
+
+      - name: No plaintext environment is tracked
+        run: |
+          set -euo pipefail
+          tracked="$(git ls-files '.env' '.env.*' 'env/dec/*.env' | grep -v '^\.env\.example$' || true)"
+          test -z "$tracked" || { echo "$tracked"; exit 1; }
+
+      - name: The web server never writes to the canonical database
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib, re, sys
+
+          forbidden = re.compile(r'\b(INSERT INTO|UPDATE |DELETE FROM|CREATE TABLE|ALTER TABLE|DROP TABLE)\b', re.IGNORECASE)
+          offenders = []
+          for path in pathlib.Path("src").rglob("*.rs"):
+              text = path.read_text()
+              for match in forbidden.finditer(text):
+                  line = text[:match.start()].count("\n") + 1
+                  # The guard test in data/db.rs names these on purpose.
+                  if path.name == "db.rs" and "is_select" in text.splitlines()[line - 1]:
+                      continue
+                  offenders.append(f"{path}:{line}: {match.group(0)}")
+          if offenders:
+              print("\n".join(offenders))
+              sys.exit("the web server must never issue a write statement")
+          PY

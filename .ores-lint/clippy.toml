@@ -1,0 +1,5 @@
+# Clippy configuration. CI runs `cargo clippy --all-targets -- -D warnings`.
+msrv = "1.88.0"
+# A page render that allocates a few strings is fine; a page that blocks is not.
+too-many-arguments-threshold = 9
+type-complexity-threshold = 500

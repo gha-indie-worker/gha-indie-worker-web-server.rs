@@ -24,3 +24,6 @@ Cargo.lock
 !/env/enc/dev.env.enc
 !/env/enc/prod.env.enc
 # END ores-sops dotenv policy
+/assets/vendor/htmx.min.js
+/assets/releases/*
+!/assets/releases/.gitkeep
