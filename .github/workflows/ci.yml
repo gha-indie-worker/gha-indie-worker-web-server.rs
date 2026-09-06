@@ -22,6 +22,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Stage the commit-pinned private rate-limit core
+        uses: ores-rate-limit/ores-rl-lib-core@31df606d26280611e2d2d684328a804644eb4255
+        with:
+          target-path: .zed-deps/ores-rl-lib-core
+      - name: Stage the commit-pinned private shared-auth client
+        uses: shared-auth/shared-auth-clients@04b7265c9f588f7b6891f49b8f0102194f536be4
+        with:
+          target-path: .zed-deps/shared-auth-client
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: 1.95.0
@@ -42,21 +50,21 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Lint
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings --config 'patch."https://github.com/ores-rate-limit/ores-rl-lib-core".ores-rl-lib-core.path=".zed-deps/ores-rl-lib-core"' --config 'patch."https://github.com/shared-auth/shared-auth-clients".shared-auth-client.path=".zed-deps/shared-auth-client"'
 
       - name: Test
-        run: cargo test --locked --all-targets
+        run: cargo test --locked --all-targets --config 'patch."https://github.com/ores-rate-limit/ores-rl-lib-core".ores-rl-lib-core.path=".zed-deps/ores-rl-lib-core"' --config 'patch."https://github.com/shared-auth/shared-auth-clients".shared-auth-client.path=".zed-deps/shared-auth-client"'
 
       # The server must still build for a deployment with no canonical pool and
       # no websocket relay, so those features cannot become load-bearing.
       - name: Build without optional avenues
-        run: cargo check --locked --no-default-features
+        run: cargo check --locked --no-default-features --config 'patch."https://github.com/ores-rate-limit/ores-rl-lib-core".ores-rl-lib-core.path=".zed-deps/ores-rl-lib-core"' --config 'patch."https://github.com/shared-auth/shared-auth-clients".shared-auth-client.path=".zed-deps/shared-auth-client"'
 
       - name: Build with islands
-        run: cargo check --locked --features islands
+        run: cargo check --locked --features islands --config 'patch."https://github.com/ores-rate-limit/ores-rl-lib-core".ores-rl-lib-core.path=".zed-deps/ores-rl-lib-core"' --config 'patch."https://github.com/shared-auth/shared-auth-clients".shared-auth-client.path=".zed-deps/shared-auth-client"'
 
       - name: Documentation
-        run: cargo doc --locked --no-deps
+        run: cargo doc --locked --no-deps --config 'patch."https://github.com/ores-rate-limit/ores-rl-lib-core".ores-rl-lib-core.path=".zed-deps/ores-rl-lib-core"' --config 'patch."https://github.com/shared-auth/shared-auth-clients".shared-auth-client.path=".zed-deps/shared-auth-client"'
 
   assets:
     runs-on: ubuntu-24.04
@@ -66,6 +74,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Stage the commit-pinned private rate-limit core
+        uses: ores-rate-limit/ores-rl-lib-core@31df606d26280611e2d2d684328a804644eb4255
+        with:
+          target-path: .zed-deps/ores-rl-lib-core
+      - name: Stage the commit-pinned private shared-auth client
+        uses: shared-auth/shared-auth-clients@04b7265c9f588f7b6891f49b8f0102194f536be4
+        with:
+          target-path: .zed-deps/shared-auth-client
       - name: Vendor browser assets
         run: scripts/vendor-assets.sh
 
@@ -105,6 +121,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Stage the commit-pinned private rate-limit core
+        uses: ores-rate-limit/ores-rl-lib-core@31df606d26280611e2d2d684328a804644eb4255
+        with:
+          target-path: .zed-deps/ores-rl-lib-core
+      - name: Stage the commit-pinned private shared-auth client
+        uses: shared-auth/shared-auth-clients@04b7265c9f588f7b6891f49b8f0102194f536be4
+        with:
+          target-path: .zed-deps/shared-auth-client
       - name: Configuration keys are declared in .cli-flags.toml
         run: |
           set -euo pipefail
