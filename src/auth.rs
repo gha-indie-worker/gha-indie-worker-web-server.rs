@@ -26,7 +26,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use ores_middleware::integrations::{AuthDecision, AuthVerifier, IntegrationError, RequestMetadata};
+use ores_middleware::{AuthDecision, AuthVerifier, IntegrationError, RequestMetadata};
 use shared_auth_client::{Introspection, SharedAuthClient};
 use thiserror::Error;
 

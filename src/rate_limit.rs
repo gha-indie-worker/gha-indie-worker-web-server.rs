@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use hmac::{Hmac, Mac};
-use ores_middleware::integrations::RateLimiter;
+use ores_middleware::RateLimiter;
 use ores_rl_lib_core::{transition, Decision, LimitPolicy, LimitState};
 use sha2::Sha256;
 use tokio::sync::Mutex;
