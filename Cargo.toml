@@ -41,7 +41,7 @@ jsonwebtoken = "9"
 maud = { version = "0.27", features = ["axum"] }
 next-loggers = { package = "oresoftware-next-loggers", git = "https://github.com/ores-otel/ores.otel.log.git", rev = "b55271c047be761c4711d87cbd500a49eefda3d9" }
 ores-middleware = { git = "https://github.com/ORESoftware/ores-middleware", rev = "6f73bf1ae97f38f05e2e87e4eb3e0e18e0142529", features = ["axum", "compression"] }
-ores-rl-lib-core = { git = "https://github.com/ores-rate-limit/ores-rl-lib-core", tag = "v0.2.0", default-features = false }
+ores-rl-lib-core = { git = "https://github.com/ores-rate-limit/ores-rl-lib-core", rev = "31df606d26280611e2d2d684328a804644eb4255", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sea-orm = { version = "2.0.0", optional = true, default-features = false, features = ["macros", "runtime-tokio-rustls", "sqlx-postgres", "with-json", "with-uuid", "with-time"] }
 serde = { version = "1", features = ["derive"] }
