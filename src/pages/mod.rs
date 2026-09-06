@@ -37,7 +37,6 @@ use crate::state::{AppState, Ctx};
 use crate::{assets, auth};
 
 /// Every route. One `GET`, a handful of `POST`s, the socket, the assets, and the probes.
-#[must_use]
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(health::healthz))

@@ -21,12 +21,8 @@ use crate::sri;
 
 /// The stylesheet. Committed, so it is always embedded.
 const APP_CSS: &str = include_str!("../assets/app.css");
-/// Its committed pin, asserted by a unit test rather than at run time: the bytes are in the
-/// binary, so the only thing that can drift is the pin file.
-const APP_CSS_PIN: &str = include_str!("../assets/app.css.sha384");
 /// The live-log-tail client. Committed; it is ours.
 const TAIL_JS: &str = include_str!("../assets/tail.js");
-const TAIL_JS_PIN: &str = include_str!("../assets/tail.js.sha384");
 
 #[cfg(htmx_vendored)]
 const HTMX_JS: Option<&[u8]> = Some(include_bytes!("../assets/htmx.min.js"));
@@ -142,6 +138,12 @@ pub fn assets() -> &'static Assets {
 
 #[cfg(test)]
 mod tests {
+    /// The committed pins. Only the tests read them: the bytes themselves are embedded in the
+    /// binary, so at run time there is nothing to verify them against -- the only thing that can
+    /// drift is the pin file, and that is a build-time fact, not a run-time one.
+    const APP_CSS_PIN: &str = include_str!("../assets/app.css.sha384");
+    const TAIL_JS_PIN: &str = include_str!("../assets/tail.js.sha384");
+
     use super::*;
 
     /// The one pin the repository can enforce on its own: `assets/app.css.sha384` must be the

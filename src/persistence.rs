@@ -439,12 +439,7 @@ impl Store {
                 });
             };
             claim.verified = true;
-            if !organization
-                .policy
-                .verified_domains
-                .iter()
-                .any(|existing| *existing == domain)
-            {
+            if !organization.policy.verified_domains.contains(&domain) {
                 organization.policy.verified_domains.push(domain.clone());
             }
             Ok(())
