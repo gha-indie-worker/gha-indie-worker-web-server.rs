@@ -2,3 +2,16 @@ name = "gha-indie-worker-web-server.rs"
 kind = "web-server"
 version = "0.1.0"
 
+# One binary, five host-routed surfaces. `lib_core::runtime::surface::resolve` is the authority on
+# which host is which; this list exists so zed-pkg and the edge router agree with it.
+surfaces = ["www", "user", "org", "app", "m"]
+
+# Surfaces this binary must answer 404 for. Served by a different binary in a different plane.
+refuses = ["admin", "admin-api", "api", "auth"]
+
+[web]
+framework = "axum"
+templates = "maud"
+interactivity = "htmx"      # vendored; see scripts/vendor-htmx.py. Never React, never JSX.
+websocket = "/ws"
+assets = "embedded"         # include_str!/include_bytes!, integrity computed at boot
