@@ -340,10 +340,10 @@ mod tests {
     fn a_deferred_form_token_is_verified_against_the_subject() {
         let key = CsrfKey::new("secret", "giw_csrf", true);
         let token = key.issue("user_1");
-        let context = context(CsrfCheck::DeferredToForm, "user_1");
-        assert!(context.verify_form_csrf(&key, Some(&token)).is_ok());
-        assert!(context.verify_form_csrf(&key, None).is_err());
-        assert!(context.verify_form_csrf(&key, Some("nope")).is_err());
+        let ctx = context(CsrfCheck::DeferredToForm, "user_1");
+        assert!(ctx.verify_form_csrf(&key, Some(&token)).is_ok());
+        assert!(ctx.verify_form_csrf(&key, None).is_err());
+        assert!(ctx.verify_form_csrf(&key, Some("nope")).is_err());
 
         let other = context(CsrfCheck::DeferredToForm, "user_2");
         assert!(other.verify_form_csrf(&key, Some(&token)).is_err());

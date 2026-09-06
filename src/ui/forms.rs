@@ -184,7 +184,7 @@ mod tests {
             html! {},
         )
         .into_string();
-        assert!(targeted.contains(r#"hx-target="#panel""#));
+        assert!(targeted.contains(r##"hx-target="#panel""##));
         assert!(targeted.contains(r#"hx-swap="innerHTML""#));
     }
 
