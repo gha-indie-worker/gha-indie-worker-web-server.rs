@@ -89,7 +89,13 @@ async fn each_surface_reports_itself_on_the_body_element() {
         (ORG_HOST, "org"),
         (MOBILE_HOST, "m"),
     ] {
-        let path = if host == USER_HOST { "/login" } else { "/" };
+        // user. and org. are login-gated: a signed-out visitor at their root is redirected
+        // to /login (see the redirect test above), so ask them for the page they serve.
+        let path = if host == USER_HOST || host == ORG_HOST {
+            "/login"
+        } else {
+            "/"
+        };
         let body = text(get(&state, host, path).await).await;
         assert!(
             body.contains(&format!(r#"data-surface="{label}""#)),

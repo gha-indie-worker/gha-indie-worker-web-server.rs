@@ -134,6 +134,14 @@ pub fn page(context: &PageContext, meta: &PageMeta, body: Markup) -> Markup {
     let hx_headers = format!("{{\"X-CSRF-Token\": \"{}\"}}", context.csrf_token);
     let full_title = format!("{} — {PRODUCT_NAME}", meta.title);
 
+    // An unrecognised Host gets the page and nothing else: no masthead, no navigation,
+
+    // no footer, no chat. Product chrome on a host we do not serve is a phishing
+
+    // surface and a way to enumerate which surfaces exist.
+
+    let chrome = context.surface != Surface::Unknown;
+
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -156,14 +164,14 @@ pub fn page(context: &PageContext, meta: &PageMeta, body: Markup) -> Markup {
             }
             body class=(body_class) data-surface=(context.surface.label()) hx-boost="true" hx-headers=(hx_headers) {
                 a class="skip-link" href="#main" { "Skip to content" }
-                (masthead(context, meta))
+                @if chrome { (masthead(context, meta)) }
                 main id="main" { (body) }
-                (site_footer(context))
-                @if context.surface.is_compact() {
+                @if chrome { (site_footer(context)) }
+                @if chrome && context.surface.is_compact() {
                     (nav::bottom_nav(context, meta.active))
                 }
                 @if let Some(audience) = meta.chat {
-                    @if context.chat_enabled {
+                    @if chrome && context.chat_enabled {
                         (chat_widget::widget(context, audience))
                     }
                 }
