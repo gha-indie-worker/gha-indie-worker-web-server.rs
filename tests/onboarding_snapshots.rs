@@ -56,7 +56,8 @@ fn step_two_offers_dns_and_email_proof() {
 
     assert!(html.contains("02 / ONBOARDING"));
     assert!(html.contains("<h1>Verify domain</h1>"));
-    assert!(html.contains(r#"<option value="dns-txt">DNS TXT record</option>"#));
+    // dns-txt is the default proof method, so it renders as the selected option.
+    assert!(html.contains(r#"<option value="dns-txt" selected="selected">DNS TXT record</option>"#));
     assert!(html.contains(r#"<option value="email">Email to an address at the domain</option>"#));
     assert!(html.contains(r#"hx-post="/onboarding/verify-domain""#));
     // No record is shown before one has been minted.
