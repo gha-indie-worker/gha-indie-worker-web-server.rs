@@ -63,7 +63,11 @@ async fn valid_csrf_cannot_turn_a_release_route_into_a_write_route() {
                     .unwrap();
                 let response = send(&app, request).await;
                 // a csrf rejection would not prove that method dispatch remains read-only
-                assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED, "{method} {host}{path}");
+                assert_eq!(
+                    response.status(),
+                    StatusCode::METHOD_NOT_ALLOWED,
+                    "{method} {host}{path}"
+                );
             }
         }
     }
