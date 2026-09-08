@@ -183,7 +183,7 @@ mod tests {
         let error = ServerError::Bind {
             bind: "127.0.0.1:8081".into(),
         };
-        assert_eq!(error.to_string(), "could not bind 127.0.1:8081".replace("127.0.1", "127.0.0.1"));
+        assert_eq!(error.to_string(), "could not bind 127.0.0.1:8081");
         assert!(!ServerError::Serve.to_string().contains("postgres"));
     }
 }
