@@ -1,0 +1,8 @@
+command: ["npm", "start"]
+env:
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+# DATABRICKS_HOST and DATABRICKS_APP_PORT are platform-provided.
+# Set INDIEBUILD_RELEASE_VIEW to a consumer-approved catalog.schema.view.
+# Configure user_api_scopes: [sql] on the app resource, not in this file.
+# Never supply a service-principal token as a user-authorization fallback.

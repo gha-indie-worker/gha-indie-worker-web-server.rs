@@ -27,3 +27,10 @@ Cargo.lock
 /assets/vendor/htmx.min.js
 /assets/releases/*
 !/assets/releases/.gitkeep
+
+# Local scratch work and package installs must never be published.
+tmp/
+temp/
+node_modules/
+# Executable services need a reviewed lockfile for the existing --locked CI gate.
+!Cargo.lock
