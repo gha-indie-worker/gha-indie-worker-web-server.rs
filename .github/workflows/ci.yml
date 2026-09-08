@@ -13,195 +13,107 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  FLEET_READ_TOKEN: ${{ secrets.FLEET_READ_TOKEN }}
-
 jobs:
   rust:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      executed: ${{ steps.evidence.outputs.executed }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
-
-
-      # ores-rl-lib-core and shared-auth-client are git dependencies on private repositories in OTHER orgs.
-      # A composite staging action (the ores-chat pattern) cannot reach across orgs, so this needs a read-only
-      # token. Without it the build steps are skipped and the job says so, rather than failing on a missing
-      # credential that nobody can supply from a pull request.
-      - name: Configure access to the private fleet crates
-        if: env.FLEET_READ_TOKEN != ''
-        run: git config --global url."https://x-access-token:${FLEET_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
-      - name: Say why the build is being skipped
-        if: env.FLEET_READ_TOKEN == ''
-        run: |
-          echo "::warning title=No credential for the private fleet crates::FLEET_READ_TOKEN is not set, so ores-rl-lib-core and shared-auth-client cannot be fetched and the cargo steps are skipped. Add a read-only token with access to ores-rate-limit/ores-rl-lib-core and shared-auth/shared-auth-clients as the FLEET_READ_TOKEN secret."
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: 1.95.0
           components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-
-      # The fleet crates are private git dependencies.
-      - name: Authenticate private git dependencies
-        env:
-          GH_TOKEN: ${{ secrets.SHARED_AUTH_READ_TOKEN }}
-        run: |
-          if [ -n "${GH_TOKEN}" ]; then
-            git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
-          fi
-
       - name: Format
         run: cargo fmt --all -- --check
-
+      - name: Fetch locked dependencies with process-local read-only authentication
+        env:
+          FLEET_READ_TOKEN: ${{ secrets.FLEET_READ_TOKEN }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_READ_TOKEN:-}" ]; then
+            echo '::error title=Private dependency access unavailable::Compilation and tests have NOT run. This is blocked evidence, never a successful test result. Supply a least-privilege read-only credential through the approved secret channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=''
+          export GIT_CONFIG_KEY_1=credential.helper
+          export GIT_CONFIG_VALUE_1="!sh $GITHUB_WORKSPACE/scripts/git-read-credential.sh"
+          cargo fetch --locked
+      # No private credential is in the environment of any build or test step.
+      # --frozen forbids a lockfile change or implicit network resolution.
       - name: Lint
-        if: env.FLEET_READ_TOKEN != ''
-        run: cargo clippy --locked --all-targets -- -D warnings
-
+        run: cargo clippy --frozen --all-targets -- -D warnings
       - name: Test
-        if: env.FLEET_READ_TOKEN != ''
-        run: cargo test --locked --all-targets
-
-      # The server must still build for a deployment with no canonical pool and
-      # no websocket relay, so those features cannot become load-bearing.
+        run: cargo test --frozen --all-targets
       - name: Build without optional avenues
-        if: env.FLEET_READ_TOKEN != ''
-        run: cargo check --locked --no-default-features
-
+        run: cargo check --frozen --no-default-features
       - name: Build with islands
-        if: env.FLEET_READ_TOKEN != ''
-        run: cargo check --locked --features islands
-
+        run: cargo check --frozen --features islands
       - name: Documentation
-        if: env.FLEET_READ_TOKEN != ''
-        run: cargo doc --locked --no-deps
+        run: cargo doc --frozen --no-deps
+      - name: Record executed evidence
+        id: evidence
+        run: echo 'executed=true' >> "$GITHUB_OUTPUT"
 
   assets:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
-
-
-      # ores-rl-lib-core and shared-auth-client are git dependencies on private repositories in OTHER orgs.
-      # A composite staging action (the ores-chat pattern) cannot reach across orgs, so this needs a read-only
-      # token. Without it the build steps are skipped and the job says so, rather than failing on a missing
-      # credential that nobody can supply from a pull request.
-      - name: Configure access to the private fleet crates
-        if: env.FLEET_READ_TOKEN != ''
-        run: git config --global url."https://x-access-token:${FLEET_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
-      - name: Say why the build is being skipped
-        if: env.FLEET_READ_TOKEN == ''
-        run: |
-          echo "::warning title=No credential for the private fleet crates::FLEET_READ_TOKEN is not set, so ores-rl-lib-core and shared-auth-client cannot be fetched and the cargo steps are skipped. Add a read-only token with access to ores-rate-limit/ores-rl-lib-core and shared-auth/shared-auth-clients as the FLEET_READ_TOKEN secret."
-      - name: Vendor browser assets
-        run: scripts/vendor-assets.sh
-
-      - name: Vendoring is idempotent
+      - name: Vendor browser assets and verify idempotence
         run: |
           set -euo pipefail
+          scripts/vendor-assets.sh
           before="$(sha256sum assets/vendor/htmx.min.js | cut -d' ' -f1)"
           scripts/vendor-assets.sh
           after="$(sha256sum assets/vendor/htmx.min.js | cut -d' ' -f1)"
           test "$before" = "$after"
 
-      - name: No third-party origin is referenced from a page
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import pathlib, re, sys
-
-          # Vendored assets are exempt; source is not.
-          offenders = []
-          allowed = {"https://github.com/gha-indie-worker", "https://unpkg.com"}
-          pattern = re.compile(r'(?:src|href)\s*=\s*\(?"?(https?://[^")\s]+)')
-          for path in pathlib.Path("src").rglob("*.rs"):
-              for match in pattern.finditer(path.read_text()):
-                  url = match.group(1)
-                  if not any(url.startswith(prefix) for prefix in allowed):
-                      offenders.append(f"{path}: {url}")
-          if offenders:
-              print("\n".join(offenders))
-              sys.exit("a page references a third-party origin")
-          PY
-
   policy:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+      - name: Source and configuration policy
+        run: python3 scripts/ci-policy.py
 
+  release-packages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Run dependency-free package and credential tests
+        run: node --test tests/release-packages/*.test.mjs
 
-      # ores-rl-lib-core and shared-auth-client are git dependencies on private repositories in OTHER orgs.
-      # A composite staging action (the ores-chat pattern) cannot reach across orgs, so this needs a read-only
-      # token. Without it the build steps are skipped and the job says so, rather than failing on a missing
-      # credential that nobody can supply from a pull request.
-      - name: Configure access to the private fleet crates
-        if: env.FLEET_READ_TOKEN != ''
-        run: git config --global url."https://x-access-token:${FLEET_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
-      - name: Say why the build is being skipped
-        if: env.FLEET_READ_TOKEN == ''
-        run: |
-          echo "::warning title=No credential for the private fleet crates::FLEET_READ_TOKEN is not set, so ores-rl-lib-core and shared-auth-client cannot be fetched and the cargo steps are skipped. Add a read-only token with access to ores-rate-limit/ores-rl-lib-core and shared-auth/shared-auth-clients as the FLEET_READ_TOKEN secret."
-      - name: Configuration keys are declared in .cli-flags.toml
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import pathlib, re, sys, tomllib
-
-          declared = set()
-          flags = tomllib.loads(pathlib.Path(".cli-flags.toml").read_text())["flags"]
-          for flag in flags.values():
-              if "env" in flag:
-                  declared.add(flag["env"])
-
-          # Keys the server reads that belong to another crate's contract.
-          external = {
-              "PORT", "RUST_LOG", "APP_ENV",
-              "ORES_MIDDLEWARE_ENV", "ORES_MIDDLEWARE_RATE_LIMIT_HMAC_SECRET",
-              "GHA_INDIE_WORKER_DATABASE_URL_CANONICAL",
-          }
-
-          used = set()
-          for path in pathlib.Path("src").rglob("*.rs"):
-              used.update(re.findall(r'var\("([A-Z0-9_]+)"\)', path.read_text()))
-              used.update(re.findall(r'env::var\("([A-Z0-9_]+)"\)', path.read_text()))
-              used.update(re.findall(r'std::env::var\("([A-Z0-9_]+)"\)', path.read_text()))
-
-          missing = sorted(used - declared - external)
-          if missing:
-              sys.exit("undeclared configuration keys: " + ", ".join(missing))
-          PY
-
-      - name: No plaintext environment is tracked
+  acceptance:
+    if: always()
+    needs: [rust, assets, policy, release-packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require actual successful execution
+        env:
+          RUST_RESULT: ${{ needs.rust.result }}
+          RUST_EXECUTED: ${{ needs.rust.outputs.executed }}
+          POLICY_RESULT: ${{ needs.policy.result }}
+          ASSETS_RESULT: ${{ needs.assets.result }}
+          PACKAGES_RESULT: ${{ needs.release-packages.result }}
         run: |
           set -euo pipefail
-          tracked="$(git ls-files '.env' '.env.*' 'env/dec/*.env' | grep -v '^\.env\.example$' || true)"
-          test -z "$tracked" || { echo "$tracked"; exit 1; }
-
-      - name: The web server never writes to the canonical database
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import pathlib, re, sys
-
-          forbidden = re.compile(r'\b(INSERT INTO|UPDATE |DELETE FROM|CREATE TABLE|ALTER TABLE|DROP TABLE)\b', re.IGNORECASE)
-          offenders = []
-          for path in pathlib.Path("src").rglob("*.rs"):
-              text = path.read_text()
-              for match in forbidden.finditer(text):
-                  line = text[:match.start()].count("\n") + 1
-                  # The guard test in data/db.rs names these on purpose.
-                  if path.name == "db.rs" and "is_select" in text.splitlines()[line - 1]:
-                      continue
-                  offenders.append(f"{path}:{line}: {match.group(0)}")
-          if offenders:
-              print("\n".join(offenders))
-              sys.exit("the web server must never issue a write statement")
-          PY
+          test "$RUST_RESULT" = success
+          test "$RUST_EXECUTED" = true
+          test "$POLICY_RESULT" = success
+          test "$ASSETS_RESULT" = success
+          test "$PACKAGES_RESULT" = success
