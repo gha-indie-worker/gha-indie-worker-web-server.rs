@@ -27,3 +27,7 @@ Cargo.lock
 /assets/vendor/htmx.min.js
 /assets/releases/*
 !/assets/releases/.gitkeep
+
+# keep temporary test and work directories out of commits
+tmp/
+temp/
