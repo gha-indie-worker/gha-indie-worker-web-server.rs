@@ -109,7 +109,9 @@ mod tests {
         )
         .expect("nats url is a documented flag");
         assert!(
-            resolved.values().any(|value| value == "nats://127.0.0.1:4222"),
+            resolved
+                .values()
+                .any(|value| value == "nats://127.0.0.1:4222"),
             "resolved keys: {:?}",
             resolved.keys().collect::<Vec<_>>()
         );
@@ -123,6 +125,6 @@ mod tests {
         )
         .expect_err("NATS credentials must not be CLI flags");
         assert!(error.contains("--gha-indie-worker-nats-user"));
-        assert!(!error.contains("worker"));
+        assert!(!error.contains("=worker"));
     }
 }
