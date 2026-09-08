@@ -24,3 +24,15 @@ Cargo.lock
 !/env/enc/dev.env.enc
 !/env/enc/prod.env.enc
 # END ores-sops dotenv policy
+/assets/vendor/htmx.min.js
+/assets/releases/*
+!/assets/releases/.gitkeep
+
+# keep temporary test and work directories out of commits
+tmp/
+temp/
+
+# Package-local installs must never be published.
+node_modules/
+# Executable services need a reviewed lockfile for the existing --locked CI gate.
+!Cargo.lock

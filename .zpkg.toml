@@ -1,4 +1,18 @@
+org = "gha-indie-worker"
 name = "gha-indie-worker-web-server.rs"
 kind = "web-server"
+language = "rust"
 version = "0.1.0"
+description = "MASH (maud + axum + SeaORM + htmx) host-routed web server for indiebuild.dev"
 
+[dependencies]
+"gha-indie-worker/gha-indie-worker-interfaces" = "^0.1.0"
+"gha-indie-worker/gha-indie-worker-lib-core" = "^0.1.0"
+"gha-indie-worker/gha-indie-worker-orm-core" = "^0.1.0"
+"shared-auth/shared-auth-clients" = "^0.1.0"
+"ORESoftware/ores-middleware" = "^1.0.0"
+"ores-rate-limit/ores-rl-lib-core" = "^0.2.0"
+"ores-otel/ores.otel.log" = "^0.1.0"
+"opto-sync/opto-sync-lib" = "^0.1.0"
+"ores-chat/ores-chat-clients" = "^0.1.0"
+"ORESoftware/ores-web-loader" = "^0.1.0"

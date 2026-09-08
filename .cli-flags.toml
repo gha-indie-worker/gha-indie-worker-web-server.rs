@@ -1,4 +1,11 @@
-# flags-2-env surface for `ghaiw-web`
+# flags-2-env surface for `ghaiw-web`.
+#
+# Every runtime knob this server reads is declared here and mirrored into
+# `generated/` by flags-2-env. Nothing is read from the environment that does
+# not appear in this file, and no value declared here is ever logged.
+#
+# Regenerate after editing:  npx flags-2-env generate
+
 [flags.config]
 env = "GHA_INDIE_WORKER_CONFIG"
 long = "config"
@@ -33,3 +40,179 @@ env = "GHA_INDIE_WORKER_WEB_BIND"
 long = "gha-indie-worker-web-bind"
 type = "string"
 help = "Runtime environment key GHA_INDIE_WORKER_WEB_BIND."
+
+# ---------------------------------------------------------------------------
+# Host routing
+# ---------------------------------------------------------------------------
+
+[flags.gha-indie-worker-base-domain]
+env = "GHA_INDIE_WORKER_BASE_DOMAIN"
+long = "gha-indie-worker-base-domain"
+type = "string"
+help = "Apex the four product hosts hang off. Default indiebuild.dev."
+
+[flags.gha-indie-worker-trusted-proxy-cidrs]
+env = "GHA_INDIE_WORKER_TRUSTED_PROXY_CIDRS"
+long = "gha-indie-worker-trusted-proxy-cidrs"
+type = "string"
+help = "Comma-separated CIDRs whose X-Forwarded-Host is honoured. Defaults to Cloudflare."
+
+[flags.gha-indie-worker-dev-surface]
+env = "GHA_INDIE_WORKER_DEV_SURFACE"
+long = "gha-indie-worker-dev-surface"
+type = "string"
+help = "Surface served for loopback hosts in development: app, user, org or m."
+
+[flags.gha-indie-worker-env]
+env = "GHA_INDIE_WORKER_ENV"
+long = "gha-indie-worker-env"
+type = "string"
+help = "Runtime posture: development, test, staging or production."
+
+# ---------------------------------------------------------------------------
+# Data avenues
+# ---------------------------------------------------------------------------
+
+[flags.database-url-canonical]
+env = "DATABASE_URL_CANONICAL"
+long = "database-url-canonical"
+type = "string"
+help = "Read-only SeaORM pool for the canonical Neon/Supabase database. Never used for writes."
+
+[flags.gha-indie-worker-web-tcp-bind]
+env = "GHA_INDIE_WORKER_WEB_TCP_BIND"
+long = "gha-indie-worker-web-tcp-bind"
+type = "string"
+help = "Bind address for the stateful length-prefixed JSON TCP avenue."
+
+[flags.gha-indie-worker-nats-url]
+env = "GHA_INDIE_WORKER_NATS_URL"
+long = "gha-indie-worker-nats-url"
+type = "string"
+help = "NATS/JetStream URL for the async avenue (subjects giw.<env>.<domain>.<event>)."
+
+# ---------------------------------------------------------------------------
+# Sessions, CSRF and rate limiting
+# ---------------------------------------------------------------------------
+
+[flags.gha-indie-worker-session-secret]
+env = "GHA_INDIE_WORKER_SESSION_SECRET"
+long = "gha-indie-worker-session-secret"
+type = "string"
+help = "HMAC key for session and CSRF tokens. Required in production. Never logged."
+
+[flags.gha-indie-worker-session-cookie-name]
+env = "GHA_INDIE_WORKER_SESSION_COOKIE_NAME"
+long = "gha-indie-worker-session-cookie-name"
+type = "string"
+help = "Session cookie name. Host-scoped; no Domain attribute is ever emitted."
+
+[flags.gha-indie-worker-csrf-cookie-name]
+env = "GHA_INDIE_WORKER_CSRF_COOKIE_NAME"
+long = "gha-indie-worker-csrf-cookie-name"
+type = "string"
+help = "Double-submit CSRF cookie name. Readable by htmx, so not HttpOnly."
+
+[flags.gha-indie-worker-session-ttl-seconds]
+env = "GHA_INDIE_WORKER_SESSION_TTL_SECONDS"
+long = "gha-indie-worker-session-ttl-seconds"
+type = "string"
+help = "Maximum session lifetime in seconds. Never exceeds what shared-auth granted."
+
+[flags.gha-indie-worker-rate-limit-hmac-secret]
+env = "GHA_INDIE_WORKER_RATE_LIMIT_HMAC_SECRET"
+long = "gha-indie-worker-rate-limit-hmac-secret"
+type = "string"
+help = "HMAC key that makes rate-limit keys opaque. Required in production."
+
+# ---------------------------------------------------------------------------
+# shared-auth (product instance only — admin bases are deliberately absent)
+# ---------------------------------------------------------------------------
+
+[flags.shared-auth-base]
+env = "SHARED_AUTH_BASE"
+long = "shared-auth-base"
+type = "string"
+help = "shared-auth mounted prefix, for example https://auth.indiebuild.dev/shared-auth."
+
+[flags.shared-auth-audience]
+env = "SHARED_AUTH_AUDIENCE"
+long = "shared-auth-audience"
+type = "string"
+help = "Delegated product audience pinned on every introspection."
+
+[flags.shared-auth-introspect-secret]
+env = "SHARED_AUTH_INTROSPECT_SECRET"
+long = "shared-auth-introspect-secret"
+type = "string"
+help = "Independent service credential for protected introspection. Never forwarded."
+
+[flags.supabase-url]
+env = "SUPABASE_URL"
+long = "supabase-url"
+type = "string"
+help = "Supabase project URL; its JWKS is derived from this unless SUPABASE_JWKS_URL is set."
+
+[flags.supabase-jwks-url]
+env = "SUPABASE_JWKS_URL"
+long = "supabase-jwks-url"
+type = "string"
+help = "Explicit Supabase JWKS endpoint for federated session JWTs."
+
+[flags.neon-auth-url]
+env = "NEON_AUTH_URL"
+long = "neon-auth-url"
+type = "string"
+help = "Neon Auth base URL."
+
+[flags.neon-auth-jwks-url]
+env = "NEON_AUTH_JWKS_URL"
+long = "neon-auth-jwks-url"
+type = "string"
+help = "Neon Auth JWKS endpoint for federated session JWTs."
+
+[flags.gha-indie-worker-jwt-issuers]
+env = "GHA_INDIE_WORKER_JWT_ISSUERS"
+long = "gha-indie-worker-jwt-issuers"
+type = "string"
+help = "Comma-separated issuers accepted on a federated JWT. Empty disables the issuer check."
+
+[flags.gha-indie-worker-jwt-audiences]
+env = "GHA_INDIE_WORKER_JWT_AUDIENCES"
+long = "gha-indie-worker-jwt-audiences"
+type = "string"
+help = "Comma-separated audiences accepted on a federated JWT. Defaults to SHARED_AUTH_AUDIENCE."
+
+[flags.gha-indie-worker-jwks-ttl-seconds]
+env = "GHA_INDIE_WORKER_JWKS_TTL_SECONDS"
+long = "gha-indie-worker-jwks-ttl-seconds"
+type = "string"
+help = "How long a cached JWKS document is reused before it is refetched."
+
+# ---------------------------------------------------------------------------
+# Assets, islands and chat
+# ---------------------------------------------------------------------------
+
+[flags.gha-indie-worker-assets-dir]
+env = "GHA_INDIE_WORKER_ASSETS_DIR"
+long = "gha-indie-worker-assets-dir"
+type = "string"
+help = "Directory served at /assets: vendored htmx, ores-web-loader, release bundles."
+
+[flags.gha-indie-worker-release-manifest-url]
+env = "GHA_INDIE_WORKER_RELEASE_MANIFEST_URL"
+long = "gha-indie-worker-release-manifest-url"
+type = "string"
+help = "ores-web-loader release manifest URL; its last path segment is the release id."
+
+[flags.gha-indie-worker-chat-enabled]
+env = "GHA_INDIE_WORKER_CHAT_ENABLED"
+long = "gha-indie-worker-chat-enabled"
+switch = true
+help = "Serve the ores-chat visitor and support widgets. Default on."
+
+[flags.gha-indie-worker-middleware-integrations]
+env = "GHA_INDIE_WORKER_MIDDLEWARE_INTEGRATIONS"
+long = "gha-indie-worker-middleware-integrations"
+type = "string"
+help = "Set to `off` to install ores-middleware without this service's auth and rate-limit hooks."

@@ -1,0 +1,119 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      executed: ${{ steps.evidence.outputs.executed }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Fetch locked dependencies with process-local read-only authentication
+        env:
+          FLEET_READ_TOKEN: ${{ secrets.FLEET_READ_TOKEN }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: 'true'
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_READ_TOKEN:-}" ]; then
+            echo '::error title=Private dependency access unavailable::Compilation and tests have NOT run. This is blocked evidence, never a successful test result. Supply a least-privilege read-only credential through the approved secret channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=''
+          export GIT_CONFIG_KEY_1=credential.helper
+          export GIT_CONFIG_VALUE_1="!sh $GITHUB_WORKSPACE/scripts/git-read-credential.sh"
+          cargo fetch --locked
+      # No private credential is in the environment of any build or test step.
+      # --frozen forbids a lockfile change or implicit network resolution.
+      - name: Lint
+        run: cargo clippy --frozen --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --frozen --all-targets
+      - name: Build without optional avenues
+        run: cargo check --frozen --no-default-features
+      - name: Build with islands
+        run: cargo check --frozen --features islands
+      - name: Documentation
+        run: cargo doc --frozen --no-deps
+      - name: Record executed evidence
+        id: evidence
+        run: echo 'executed=true' >> "$GITHUB_OUTPUT"
+
+  assets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Vendor browser assets and verify idempotence
+        run: |
+          set -euo pipefail
+          scripts/vendor-assets.sh
+          before="$(sha256sum assets/vendor/htmx.min.js | cut -d' ' -f1)"
+          scripts/vendor-assets.sh
+          after="$(sha256sum assets/vendor/htmx.min.js | cut -d' ' -f1)"
+          test "$before" = "$after"
+
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Source and configuration policy
+        run: python3 scripts/ci-policy.py
+
+  release-packages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Run dependency-free package and credential tests
+        run: node --test tests/release-packages/*.test.mjs
+
+  acceptance:
+    if: always()
+    needs: [rust, assets, policy, release-packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require actual successful execution
+        env:
+          RUST_RESULT: ${{ needs.rust.result }}
+          RUST_EXECUTED: ${{ needs.rust.outputs.executed }}
+          POLICY_RESULT: ${{ needs.policy.result }}
+          ASSETS_RESULT: ${{ needs.assets.result }}
+          PACKAGES_RESULT: ${{ needs.release-packages.result }}
+        run: |
+          set -euo pipefail
+          test "$RUST_RESULT" = success
+          test "$RUST_EXECUTED" = true
+          test "$POLICY_RESULT" = success
+          test "$ASSETS_RESULT" = success
+          test "$PACKAGES_RESULT" = success

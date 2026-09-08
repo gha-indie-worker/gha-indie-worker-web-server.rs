@@ -1,0 +1,8 @@
+# Shared rustfmt configuration for gha-indie-worker Rust repositories.
+# Symlinked/copied to ./rustfmt.toml by the lane; kept here so the whole
+# lint surface for a repo lives in one directory.
+edition = "2021"
+max_width = 120
+use_field_init_shorthand = true
+use_try_shorthand = true
+newline_style = "Unix"

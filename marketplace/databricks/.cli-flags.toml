@@ -1,0 +1,22 @@
+[meta]
+program = "indiebuild-databricks"
+
+[flags.port]
+type = "integer"
+env = "DATABRICKS_APP_PORT"
+description = "Port assigned by the Databricks Apps platform."
+
+[flags.workspace-host]
+type = "string"
+env = "DATABRICKS_HOST"
+description = "HTTPS workspace origin, never a bearer token."
+
+[flags.warehouse]
+type = "string"
+env = "DATABRICKS_WAREHOUSE_ID"
+description = "SQL warehouse resource ID."
+
+[flags.release-view]
+type = "string"
+env = "INDIEBUILD_RELEASE_VIEW"
+description = "Consumer-approved catalog.schema.view."

@@ -1,0 +1,125 @@
+# Deploys the image built by images.yml to Cloud Run.
+#
+# Authentication is Workload Identity Federation (OIDC): there is no JSON key in
+# this repository, in a secret, or in the image. `google-github-actions/auth`
+# exchanges the workflow's OIDC token for a short-lived access token.
+#
+# One Cloud Run service, `gha-indie-worker-web`, serves all four hosts
+# (app./user./org./m.indiebuild.dev) — the process routes on `Host`, so a domain
+# mapping per host points at the same revision.
+name: deploy-cloud-run
+
+on:
+  workflow_run:
+    workflows: ["images"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (default: the commit that triggered images)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-cloud-run-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: gha-indie-worker
+  REGION: us-central1
+  SERVICE: gha-indie-worker-web
+  REPOSITORY: gha-indie-worker
+  IMAGE: gha-indie-worker-web-server.rs
+
+jobs:
+  deploy:
+    # Never deploy a failed build.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve the image tag
+        id: image
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.image_tag }}"
+          if [ -z "$tag" ]; then
+            tag="${{ github.event.workflow_run.head_sha || github.sha }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "uri=${REGION}-docker.pkg.dev/${GCP_PROJECT}/${REPOSITORY}/${IMAGE}:${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud (WIF, no JSON key)
+        uses: google-github-actions/auth@71f986410dfbc7added4569d411d040a91dc6935 # v2.1.8
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@77e7a554d41e2ee56fc945c52dfd3f33d12def9a # v2.1.4
+        with:
+          project_id: gha-indie-worker
+
+      - name: Deploy
+        run: |
+          set -euo pipefail
+          gcloud run deploy "${SERVICE}" \
+            --project "${GCP_PROJECT}" \
+            --region "${REGION}" \
+            --image "${{ steps.image.outputs.uri }}" \
+            --platform managed \
+            --port 8080 \
+            --cpu 1 \
+            --memory 512Mi \
+            --min-instances 1 \
+            --max-instances 20 \
+            --concurrency 80 \
+            --timeout 300s \
+            --no-allow-unauthenticated \
+            --ingress internal-and-cloud-load-balancing \
+            --service-account "${{ secrets.GCP_RUNTIME_SERVICE_ACCOUNT }}" \
+            --set-env-vars "GHA_INDIE_WORKER_ENV=production,GHA_INDIE_WORKER_BASE_DOMAIN=indiebuild.dev,GHA_INDIE_WORKER_ASSETS_DIR=/app/assets,ORES_MIDDLEWARE_ENV=production,ORES_MIDDLEWARE_TLS_MODE=trusted-proxy" \
+            --set-secrets "GHA_INDIE_WORKER_SESSION_SECRET=gha-indie-worker-web-session-secret:latest,GHA_INDIE_WORKER_RATE_LIMIT_HMAC_SECRET=gha-indie-worker-web-rate-limit-secret:latest,SHARED_AUTH_INTROSPECT_SECRET=gha-indie-worker-shared-auth-introspect:latest,DATABASE_URL_CANONICAL=gha-indie-worker-canonical-read-url:latest" \
+            --revision-suffix "${{ steps.image.outputs.tag }}" \
+            --quiet
+
+      - name: Verify the new revision is serving
+        run: |
+          set -euo pipefail
+          url="$(gcloud run services describe "${SERVICE}" --project "${GCP_PROJECT}" --region "${REGION}" --format='value(status.url)')"
+          echo "service url: ${url}"
+          token="$(gcloud auth print-identity-token --audiences="${url}")"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+                 --header "Authorization: Bearer ${token}" \
+                 --header "Host: app.indiebuild.dev" \
+                 "${url}/healthz" > health.json; then
+              break
+            fi
+            sleep 2
+          done
+          python3 - <<'PY'
+          import json
+          health = json.load(open("health.json"))
+          assert health["status"] == "ok", health
+          assert health["service"] == "gha-indie-worker-web-server", health
+          PY
+
+      - name: Report
+        if: always()
+        run: |
+          echo "### Cloud Run deploy" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- service: \`${SERVICE}\` (${REGION}, ${GCP_PROJECT})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- image: \`${{ steps.image.outputs.uri }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- hosts: app./user./org./m.indiebuild.dev (one service, host-routed)" >> "$GITHUB_STEP_SUMMARY"

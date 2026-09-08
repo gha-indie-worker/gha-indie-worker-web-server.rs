@@ -13,6 +13,19 @@ COPY . .
 RUN cargo build --release --bin gha-indie-worker-web-server \
     && strip "target/release/gha-indie-worker-web-server"
 
+# Browser assets are vendored in their own stage so a Rust-only change does not
+# refetch them, and a network hiccup here cannot invalidate the build cache.
+FROM debian:bookworm-slim AS assets
+WORKDIR /assets-src
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && apt-get clean \
+    && find /var/lib/apt/lists -mindepth 1 -delete
+COPY scripts/vendor-assets.sh /usr/local/bin/vendor-assets.sh
+COPY assets ./assets
+RUN chmod 0755 /usr/local/bin/vendor-assets.sh \
+    && ASSETS_DIR=/assets-src/assets /usr/local/bin/vendor-assets.sh
+
 FROM debian:bookworm-slim AS runtime
 ARG SOPS_ENV=prod
 RUN apt-get update \
@@ -21,6 +34,7 @@ RUN apt-get update \
     && find /var/lib/apt/lists -mindepth 1 -delete \
     && useradd --system --uid 65532 --no-create-home --shell /usr/sbin/nologin app
 COPY --from=build "/src/target/release/gha-indie-worker-web-server" "/usr/local/bin/gha-indie-worker-web-server"
+COPY --from=assets /assets-src/assets /app/assets
 COPY --from=ghcr.io/getsops/sops:v3.10.2-alpine --chmod=0755 /usr/local/bin/sops /usr/local/bin/sops
 COPY --chmod=0755 scripts/sops-entrypoint.sh /usr/local/bin/sops-entrypoint.sh
 RUN --mount=type=bind,source=.,target=/src,ro \
@@ -29,7 +43,10 @@ RUN --mount=type=bind,source=.,target=/src,ro \
          cp "/src/env/enc/${SOPS_ENV}.env.enc" /app/secrets/app.env; \
        fi \
     && chown -R 65532:65532 /app /usr/local/bin/gha-indie-worker-web-server
-ENV SOPS_SECRETS_FILE=/app/secrets/app.env
+ENV SOPS_SECRETS_FILE=/app/secrets/app.env \
+    GHA_INDIE_WORKER_ASSETS_DIR=/app/assets \
+    GHA_INDIE_WORKER_WEB_BIND=0.0.0.0:8080
+WORKDIR /app
 USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/sops-entrypoint.sh", "/usr/local/bin/gha-indie-worker-web-server"]
