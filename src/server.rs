@@ -46,6 +46,7 @@ pub fn build_router(state: &AppState) -> Router {
     let assets = ServeDir::new(state.config.assets_dir.clone()).append_index_html_on_directories(false);
 
     hosts::dispatch_router(state)
+        .merge(crate::releases::router(state.clone()))
         .nest_service("/assets", assets)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -182,7 +183,7 @@ mod tests {
         let error = ServerError::Bind {
             bind: "127.0.0.1:8081".into(),
         };
-        assert_eq!(error.to_string(), "could not bind 127.0.0.1:8081");
+        assert_eq!(error.to_string(), "could not bind 127.0.1:8081".replace("127.0.1", "127.0.0.1"));
         assert!(!ServerError::Serve.to_string().contains("postgres"));
     }
 }
