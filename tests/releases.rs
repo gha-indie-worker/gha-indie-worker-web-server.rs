@@ -154,3 +154,14 @@ async fn missing_host_and_htmx_headers_do_not_grant_release_access() {
         }
     }
 }
+
+#[tokio::test]
+async fn malformed_queries_do_not_reveal_release_routes_on_other_surfaces() {
+    let app = state();
+    for path in RELEASE_PATHS {
+        for host in ["evil.example", "admin.indiebuild.dev", ORG_HOST, USER_HOST] {
+            let response = get(&app, host, &format!("{path}?limit=invalid")).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+    }
+}
