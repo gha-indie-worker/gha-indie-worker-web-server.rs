@@ -38,6 +38,7 @@ pub mod middleware;
 pub mod pages;
 pub mod persistence;
 pub mod rate_limit;
+pub mod releases;
 pub mod server;
 pub mod session;
 pub mod state;
