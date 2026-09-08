@@ -31,3 +31,8 @@ Cargo.lock
 # keep temporary test and work directories out of commits
 tmp/
 temp/
+
+# Package-local installs must never be published.
+node_modules/
+# Executable services need a reviewed lockfile for the existing --locked CI gate.
+!Cargo.lock

@@ -1,0 +1,9 @@
+{
+  "name": "@gha-indie-worker/databricks-release-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22 <25" },
+  "scripts": { "start": "node server.mjs", "test": "node --test ../../tests/release-packages/databricks*.test.mjs ../../tests/release-packages/dashboard-view.test.mjs" },
+  "dependencies": { "@oresoftware/f2e": "git+https://github.com/flags-2-env/flags-2-env.git#8892365548557e437d81a0d44d650fb9abff6c44" }
+}
