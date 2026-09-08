@@ -126,7 +126,9 @@ fn select(runs: Vec<RunSummary>, query: &ReleaseQuery) -> Result<Vec<RunSummary>
     }
     let mut identities = HashSet::new();
     if runs.len() > MAX_RUNS as usize
-        || runs.iter().any(|run| !valid_run(run) || !identities.insert((&run.repository, &run.id)))
+        || runs
+            .iter()
+            .any(|run| !valid_run(run) || !identities.insert((&run.repository, &run.id)))
     {
         return Err(WebError::Unavailable);
     }

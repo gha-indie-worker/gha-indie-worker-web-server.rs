@@ -80,7 +80,16 @@ mod tests {
 
     #[test]
     fn completed_or_unknown_is_never_inferred_success() {
-        for value in ["", "completed", "skipped", "cancelled", "canceled", "neutral", "SUCCESS", "new-state"] {
+        for value in [
+            "",
+            "completed",
+            "skipped",
+            "cancelled",
+            "canceled",
+            "neutral",
+            "SUCCESS",
+            "new-state",
+        ] {
             assert_eq!(classify(value), Group::Other);
         }
     }
@@ -110,7 +119,10 @@ mod tests {
                 .collect();
             let counts = summarize(statuses);
             assert_eq!(counts.total, length);
-            assert_eq!(counts.total, counts.success + counts.failure + counts.active + counts.other);
+            assert_eq!(
+                counts.total,
+                counts.success + counts.failure + counts.active + counts.other
+            );
         }
     }
 
