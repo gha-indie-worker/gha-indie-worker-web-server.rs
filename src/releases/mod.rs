@@ -68,10 +68,10 @@ fn valid_run(run: &RunSummary) -> bool {
 
 fn select(runs: Vec<RunSummary>, query: &ReleaseQuery) -> Result<Vec<RunSummary>, WebError> {
     let limit = query.limit.unwrap_or(MAX_RUNS);
-    if !(1..=MAX_RUNS).contains(&limit)
-        || query.repository.as_deref().is_some_and(|s| !safe_repository(s))
-    {
-        return Err(WebError::BadRequest("Use a repository in owner/name form and a limit from 1 to 50."));
+    if !(1..=MAX_RUNS).contains(&limit) || query.repository.as_deref().is_some_and(|s| !safe_repository(s)) {
+        return Err(WebError::BadRequest(
+            "Use a repository in owner/name form and a limit from 1 to 50.",
+        ));
     }
     if runs.len() > MAX_RUNS as usize || runs.iter().any(|run| !valid_run(run)) {
         return Err(WebError::Unavailable);
@@ -93,8 +93,12 @@ async fn load(context: &RequestCtx, state: &AppState, query: &ReleaseQuery) -> R
 }
 
 fn private(mut response: Response) -> Response {
-    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
-    response.headers_mut().append(header::VARY, HeaderValue::from_static("Cookie, Authorization, Host"));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    response
+        .headers_mut()
+        .append(header::VARY, HeaderValue::from_static("Cookie, Authorization, Host"));
     response
 }
 
@@ -122,7 +126,8 @@ async fn export(
             "promotionAllowed": false,
             "evidenceState": "not-collected",
             "runs": runs
-        })).into_response(),
+        }))
+        .into_response(),
         Err(error) => error.into_response(),
     })
 }
@@ -179,8 +184,13 @@ pub fn markup(runs: &[RunSummary], query: &ReleaseQuery) -> Markup {
 mod tests {
     use super::*;
     fn run() -> RunSummary {
-        RunSummary { id: "run_1".into(), repository: "gha-indie-worker/worker".into(),
-            revision: "a".repeat(40), status: "success".into(), ..RunSummary::default() }
+        RunSummary {
+            id: "run_1".into(),
+            repository: "gha-indie-worker/worker".into(),
+            revision: "a".repeat(40),
+            status: "success".into(),
+            ..RunSummary::default()
+        }
     }
     #[test]
     fn successful_run_never_implies_release_approval() {
@@ -190,28 +200,53 @@ mod tests {
     }
     #[test]
     fn escapes_untrusted_labels() {
-        let mut row = run(); row.workflow_path = "<script>alert(1)</script>".into();
+        let mut row = run();
+        row.workflow_path = "<script>alert(1)</script>".into();
         let html = markup(&[row], &ReleaseQuery::default()).into_string();
-        assert!(!html.contains("<script>")); assert!(html.contains("&lt;script&gt;"));
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;"));
     }
     #[test]
     fn validates_filters_and_caps_without_silent_truncation() {
         for limit in [0, 51, u64::MAX] {
-            assert!(select(vec![], &ReleaseQuery { limit: Some(limit), repository: None }).is_err());
+            assert!(select(
+                vec![],
+                &ReleaseQuery {
+                    limit: Some(limit),
+                    repository: None
+                }
+            )
+            .is_err());
         }
         assert!(select(vec![run(); 51], &ReleaseQuery::default()).is_err());
-        assert!(select(vec![], &ReleaseQuery { repository: Some("../secret".into()), limit: None }).is_err());
+        assert!(select(
+            vec![],
+            &ReleaseQuery {
+                repository: Some("../secret".into()),
+                limit: None
+            }
+        )
+        .is_err());
     }
     #[test]
     fn rejects_malformed_upstream_identity() {
-        let mut row = run(); row.id = "../../settings".into();
+        let mut row = run();
+        row.id = "../../settings".into();
         assert!(select(vec![row], &ReleaseQuery::default()).is_err());
-        let mut row = run(); row.revision = "main".into();
+        let mut row = run();
+        row.revision = "main".into();
         assert!(select(vec![row], &ReleaseQuery::default()).is_err());
     }
     #[test]
     fn filters_exactly_in_authorized_window() {
-        let result = select(vec![run()], &ReleaseQuery { repository: Some("other/repo".into()), limit: None }).unwrap();
+        let result = select(
+            vec![run()],
+            &ReleaseQuery {
+                repository: Some("other/repo".into()),
+                limit: None,
+            },
+        )
+        .unwrap();
         assert!(result.is_empty());
     }
 }
