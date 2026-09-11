@@ -1,6 +1,7 @@
 //! Fail-closed argv and environment resolution through flags-2-env.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::Write;
 
 use flags2env::BundledFlags2Env;
@@ -13,7 +14,37 @@ const ENV_ONLY_URLS: [&str; 2] = [
 ];
 
 pub fn resolve() -> Result<BTreeMap<String, String>, String> {
-    resolve_from(&std::env::args().collect::<Vec<_>>(), std::env::vars())
+    let argv = utf8_arguments(std::env::args_os())?;
+    let environment = utf8_environment(std::env::vars_os())?;
+    resolve_from(&argv, environment)
+}
+
+fn utf8_arguments(arguments: impl IntoIterator<Item = OsString>) -> Result<Vec<String>, String> {
+    arguments
+        .into_iter()
+        .map(|argument| {
+            argument
+                .into_string()
+                .map_err(|_| "command-line arguments must be valid UTF-8".to_owned())
+        })
+        .collect()
+}
+
+fn utf8_environment(
+    environment: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Result<BTreeMap<String, String>, String> {
+    environment
+        .into_iter()
+        .map(|(name, value)| {
+            let name = name
+                .into_string()
+                .map_err(|_| "environment variable names must be valid UTF-8".to_owned())?;
+            let value = value
+                .into_string()
+                .map_err(|_| "environment variable values must be valid UTF-8".to_owned())?;
+            Ok((name, value))
+        })
+        .collect()
 }
 
 fn resolve_from(
@@ -117,6 +148,28 @@ mod tests {
     }
 
     #[test]
+    fn public_bind_flag_overrides_environment() {
+        let resolved = resolve_from(
+            &[
+                "server".to_owned(),
+                "--gha-indie-worker-web-bind=127.0.0.1:9090".to_owned(),
+            ],
+            [(
+                "GHA_INDIE_WORKER_WEB_BIND".to_owned(),
+                "127.0.0.1:8081".to_owned(),
+            )],
+        )
+        .expect("public bind override");
+
+        assert_eq!(
+            resolved
+                .get("GHA_INDIE_WORKER_WEB_BIND")
+                .map(String::as_str),
+            Some("127.0.0.1:9090")
+        );
+    }
+
+    #[test]
     fn connection_urls_are_environment_only() {
         let database = "postgres://worker:synthetic-credential@db.internal/app";
         let api = "https://service:synthetic-credential@api.internal";
@@ -128,7 +181,10 @@ mod tests {
             ],
         )
         .expect("environment-only connection URLs");
-        assert_eq!(resolved.get(ENV_ONLY_URLS[0]).map(String::as_str), Some(api));
+        assert_eq!(
+            resolved.get(ENV_ONLY_URLS[0]).map(String::as_str),
+            Some(api)
+        );
         assert_eq!(
             resolved.get(ENV_ONLY_URLS[1]).map(String::as_str),
             Some(database)
@@ -147,10 +203,42 @@ mod tests {
     }
 
     #[test]
+    fn blank_environment_only_urls_are_not_materialized() {
+        let resolved = resolve_from(
+            &["server".to_owned()],
+            [
+                (ENV_ONLY_URLS[0].to_owned(), "   ".to_owned()),
+                (ENV_ONLY_URLS[1].to_owned(), String::new()),
+            ],
+        )
+        .expect("blank environment-only URLs");
+
+        assert!(!resolved.contains_key(ENV_ONLY_URLS[0]));
+        assert!(!resolved.contains_key(ENV_ONLY_URLS[1]));
+    }
+
+    #[test]
     fn plaintext_dotenv_is_not_a_runtime_source() {
         const SOURCE: &str = include_str!("flags.rs");
         let production = SOURCE.split("#[cfg(test)]").next().unwrap_or(SOURCE);
         assert!(!production.contains("parsed.dotenv"));
         assert!(!production.contains("dotenv_overrides"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_utf8_process_inputs_fail_closed_without_panicking() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let bad = OsString::from_vec(vec![0xff]);
+        assert_eq!(
+            utf8_arguments([bad.clone()]).expect_err("invalid argv must fail"),
+            "command-line arguments must be valid UTF-8"
+        );
+        assert_eq!(
+            utf8_environment([(OsString::from("KEY"), bad)])
+                .expect_err("invalid env value must fail"),
+            "environment variable values must be valid UTF-8"
+        );
     }
 }
