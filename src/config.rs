@@ -45,7 +45,10 @@ mod tests {
         let config = from_pairs(&[
             ("GHA_INDIE_WORKER_WEB_BIND", "127.0.0.1:18081"),
             ("GHA_INDIE_WORKER_API_HTTP_BASE", "https://api.example.test"),
-            ("GHA_INDIE_WORKER_DATABASE_URL", "postgres://synthetic.invalid/db"),
+            (
+                "GHA_INDIE_WORKER_DATABASE_URL",
+                "postgres://synthetic.invalid/db",
+            ),
         ]);
         assert_eq!(
             config,
