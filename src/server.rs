@@ -8,6 +8,7 @@ use crate::pages;
 pub enum BackendCapability {
     DirectReadOnlyDatabase,
     StatelessHttp,
+    DurableNats,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,6 +31,13 @@ pub fn startup_plan(config: &WebConfig) -> Result<StartupPlan, WebError> {
             (
                 BackendCapability::StatelessHttp,
                 "GHA_INDIE_WORKER_API_HTTP_BASE",
+                value,
+            )
+        }),
+        config.nats_url.as_ref().map(|value| {
+            (
+                BackendCapability::DurableNats,
+                "GHA_INDIE_WORKER_NATS_URL",
                 value,
             )
         }),
@@ -69,6 +77,7 @@ mod tests {
             bind: " 127.0.0.1:8081 ".into(),
             api_http_base: Some("http://api:8080".into()),
             database_url: Some("postgres://sensitive-value".into()),
+            nats_url: Some("nats://worker:credential@nats.internal:4222".into()),
         };
 
         let plan = startup_plan(&config).expect("valid web startup plan");
@@ -80,10 +89,12 @@ mod tests {
                 capabilities: vec![
                     BackendCapability::DirectReadOnlyDatabase,
                     BackendCapability::StatelessHttp,
+                    BackendCapability::DurableNats,
                 ],
             }
         );
         assert!(!format!("{plan:?}").contains("sensitive-value"));
+        assert!(!format!("{plan:?}").contains("credential"));
     }
 
     #[test]
@@ -92,6 +103,7 @@ mod tests {
             bind: "127.0.0.1:8081".into(),
             api_http_base: Some("  ".into()),
             database_url: None,
+            nats_url: None,
         })
         .expect_err("blank API base must fail closed");
 
