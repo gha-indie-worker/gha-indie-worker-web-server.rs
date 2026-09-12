@@ -1,0 +1,83 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # htmx is vendored, not loaded from a CDN. When the file and its pin are committed this
+      # verifies them and downloads nothing. Until they are, it fetches the release named in
+      # assets/htmx.version so the build has something to embed — the pages work either way, but
+      # CI should exercise the path production uses.
+      - name: htmx is vendored and matches its pin
+        run: |
+          set -euo pipefail
+          if ! python3 scripts/vendor-htmx.py --check; then
+            echo "::warning::htmx is not committed yet; vendoring it for this run. Run \
+            'python3 scripts/vendor-htmx.py' locally and commit assets/htmx.min.js{,.sha384}."
+            python3 scripts/vendor-htmx.py
+            python3 scripts/vendor-htmx.py --check
+          fi
+      - name: asset pins are current
+        run: python3 scripts/pin-assets.py --check
+
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --all-targets
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
+
+      # The pure modules import nothing outside std. Compiling each on its own is what keeps that
+      # true: the day one of them reaches for a crate, this step fails rather than the property
+      # quietly lapsing.
+      - name: Pure modules compile and pass on their own
+        run: |
+          set -euo pipefail
+          mkdir -p target/pure
+          for module in csrf present policy wire sri; do
+            rustc --edition 2021 --test "src/${module}.rs" -o "target/pure/${module}"
+            "./target/pure/${module}"
+          done
+
+      # No template may name another origin for a subresource. The CSP itself is asserted by
+      # `policy::tests::no_policy_ever_contains_an_unsafe_source`, which is the right level for it;
+      # this catches the other half — a `<script src>` or `<link href>` typed straight into a
+      # template, which is how the dependency got onto a CDN in the first place.
+      - name: No subresource is loaded from another origin
+        run: |
+          set -euo pipefail
+          if grep -rnE '(src|href)="https?://' src/ assets/; then
+            echo "::error::a template loads a subresource from another origin; vendor it instead"
+            exit 1
+          fi
+
+      - name: Audit dependencies
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          cargo audit --deny warnings

@@ -57,7 +57,9 @@ RUN --mount=type=bind,source=.,target=/src,ro \
 ENV SOPS_SECRETS_FILE=/app/secrets/app.env \
     OTEL_SERVICE_NAME=gha-indie-worker-web-server \
     OTEL_EXPORTER_OTLP_ENDPOINT=http://dd-otel-collector.observability.svc.cluster.local:4318 \
-    RUST_LOG=info
+    RUST_LOG=info \
+    GHA_INDIE_WORKER_WEB_BIND=0.0.0.0:8080
+# Assets are embedded in the binary, so there is nothing to mount and no filesystem to traverse.
 USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/sops-entrypoint.sh", "/usr/local/bin/gha-indie-worker-web-server"]
