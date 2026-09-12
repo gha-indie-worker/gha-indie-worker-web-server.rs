@@ -12,6 +12,7 @@ export interface CliEnv {
   readonly GHA_INDIE_WORKER_CONFIG?: string;
   readonly GHA_INDIE_WORKER_API_HTTP_BASE?: string;
   readonly GHA_INDIE_WORKER_DATABASE_URL?: string;
+  readonly GHA_INDIE_WORKER_NATS_URL?: string;
   readonly GHA_INDIE_WORKER_WEB_BIND?: string;
   readonly GHA_INDIE_WORKER_JSON?: boolean;
 }

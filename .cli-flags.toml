@@ -33,3 +33,9 @@ env = "GHA_INDIE_WORKER_WEB_BIND"
 long = "gha-indie-worker-web-bind"
 type = "string"
 help = "Runtime environment key GHA_INDIE_WORKER_WEB_BIND."
+
+[flags.gha-indie-worker-nats-url]
+env = "GHA_INDIE_WORKER_NATS_URL"
+long = "gha-indie-worker-nats-url"
+type = "string"
+help = "NATS broker URL. Credentials stay in the environment or secret store, never as CLI flags."
