@@ -1,0 +1,50 @@
+name: owls-release-manifest
+# Derive this build's release manifest from the files it actually emitted, then validate it
+# through the public contract. A hand-written manifest drifts from its build and takes
+# integrity down with it, so the manifest is generated — and a manifest that disagrees with
+# its tree fails here, in CI, rather than in a browser at a visitor's expense.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: check out the loader contract and native host
+        run: |
+          git clone --depth 1 https://github.com/ores-wasm-loaders/owls-interfaces .owls/interfaces
+          git clone --depth 1 https://github.com/ores-wasm-loaders/owls-runtime.rs .owls/runtime
+
+      - name: build the islands bundle
+        id: build
+        run: |
+          # TODO(pilot): this repo's islands build command, e.g. `cargo leptos build --release`.
+          # Everything below is conditional on it producing output, so the job stays green
+          # until someone fills this in.
+          echo "dir=target/site/pkg" >> "$GITHUB_OUTPUT"
+
+      - name: derive the manifest from the emitted build
+        if: hashFiles(format('{0}/**', steps.build.outputs.dir)) != ''
+        run: |
+          RELEASE_ID="${GITHUB_SHA::12}"
+          cargo run --release --manifest-path .owls/runtime/Cargo.toml --bin inspect-build -- \
+            --dir "${{ steps.build.outputs.dir }}" \
+            --app-id gha-indie-worker-web \
+            --release "$RELEASE_ID" \
+            --runtime wasm-bindgen \
+            --base-url "https://assets.indiebuild.dev/releases/$RELEASE_ID/" \
+            > "${{ steps.build.outputs.dir }}/release.json"
+
+      - name: validate it through owls-interfaces
+        if: hashFiles(format('{0}/release.json', steps.build.outputs.dir)) != ''
+        run: |
+          node --input-type=module -e "
+            const i = await import('./.owls/interfaces/index.mjs');
+            const fs = await import('node:fs');
+            const doc = JSON.parse(fs.readFileSync('${{ steps.build.outputs.dir }}/release.json', 'utf8'));
+            const release = i.parseRelease(doc, ['https://assets.indiebuild.dev'], i.releaseSchema);
+            console.log('[owls] release', release.appId + '@' + release.release, release.assets.length, 'assets');
+          "
