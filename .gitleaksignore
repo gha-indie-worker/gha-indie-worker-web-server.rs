@@ -1,0 +1,8 @@
+# gitleaks false positives, pinned by exact fingerprint (commit:file:rule:line).
+#
+# tests/router.rs:163 at 8ee70f4 (feat/mash-surfaces-and-onboarding, file since
+# superseded) is the CSRF double-submit test fixture: the hex counting sequence
+# "0123456789abcdef" repeated four times, used as both the cookie and the form
+# token in a_cross_origin_post_is_refused_even_with_a_matching_double_submit.
+# Not a credential.
+8ee70f428e4dad6ce7e3cfc98120a3bc90d6100a:tests/router.rs:generic-api-key:163

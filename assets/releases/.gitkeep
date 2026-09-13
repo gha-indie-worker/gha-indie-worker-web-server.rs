@@ -1,0 +1,6 @@
+Content-addressed release bundles are served from here as
+`/assets/releases/{hash}/…` with `Cache-Control: public, max-age=31536000,
+immutable` (see `src/middleware.rs`).
+
+Nothing in this directory is committed. The deploy copies the bundle for the
+release named by `GHA_INDIE_WORKER_RELEASE_MANIFEST_URL` into it.

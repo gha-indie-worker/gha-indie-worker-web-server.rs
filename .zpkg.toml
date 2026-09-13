@@ -1,4 +1,30 @@
+org = "gha-indie-worker"
 name = "gha-indie-worker-web-server.rs"
 kind = "web-server"
+language = "rust"
 version = "0.1.0"
+description = "MASH (maud + axum + SeaORM + htmx) host-routed web server for indiebuild.dev"
 
+# One binary, host-routed surfaces. `src/hosts/mod.rs` (`HostPolicy::surface_for_host`) is the
+# authority on which host is which; this list exists so zed-pkg and the edge router agree with it.
+# Any other host resolves to `Surface::Unknown` and is answered 404 on every path.
+surfaces = ["app", "user", "org", "m"]
+
+[web]
+framework = "axum"
+templates = "maud"
+interactivity = "htmx"      # self-hosted; fetched and SHA-384 verified by scripts/vendor-assets.sh. Never React, never JSX.
+websocket = "/ws"
+assets = "vendored"         # served from GHA_INDIE_WORKER_ASSETS_DIR, never a CDN
+
+[dependencies]
+"gha-indie-worker/gha-indie-worker-interfaces" = "^0.1.0"
+"gha-indie-worker/gha-indie-worker-lib-core" = "^0.1.0"
+"gha-indie-worker/gha-indie-worker-orm-core" = "^0.1.0"
+"shared-auth/shared-auth-clients" = "^0.1.0"
+"ORESoftware/ores-middleware" = "^1.0.0"
+"ores-rate-limit/ores-rl-lib-core" = "^0.2.0"
+"ores-otel/ores.otel.log" = "^0.1.0"
+"opto-sync/opto-sync-lib" = "^0.1.0"
+"ores-chat/ores-chat-clients" = "^0.1.0"
+"ORESoftware/ores-web-loader" = "^0.1.0"
