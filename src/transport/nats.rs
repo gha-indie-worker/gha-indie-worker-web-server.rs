@@ -1,11 +1,25 @@
-//! Path 4: durable NATS request plane (web → API).
-//!
-//! This module is a pure envelope and subject builder. Connecting and
-//! publishing over the wire is an effect at the process boundary.
-//! Credentials are never CLI flags; they stay in the environment or
-//! secret store that supplies `GHA_INDIE_WORKER_NATS_URL`.
-
 #![forbid(unsafe_code)]
+
+//! The async NATS/JetStream avenue (`GHA_INDIE_WORKER_NATS_URL`, feature
+//! `nats-transport`). Two things share the broker and are kept apart here:
+//!
+//! 1. **The web → API request plane.** A pure envelope and subject builder for
+//!    `dd.remote.web_api.gha-indie-worker.request`: [`RequestEnvelope`] is
+//!    validated and serialized by [`publish_request`] without touching a broker.
+//!    Connecting and publishing over the wire is an effect at the process
+//!    boundary. Credentials are never CLI flags; they stay in the environment or
+//!    secret store that supplies `GHA_INDIE_WORKER_NATS_URL`.
+//!
+//! 2. **Intent events.** Subjects follow the fleet algebra
+//!    `giw.<env>.<domain>.<event>`, which this module owns and validates. The web
+//!    server publishes what a person did on a page (a run was re-run, an
+//!    invitation was sent) for anything downstream that cares. It never
+//!    consumes, because a page render must not depend on a queue.
+//!
+//! The `async-nats` client itself is wired in the api-server, which owns the
+//! connection and the JetStream contexts; this module is the subject algebra and
+//! the envelope shapes, so both servers agree on the wire without this crate
+//! taking on a heavyweight dependency it would use for a handful of publishes.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -178,28 +192,79 @@ fn validate_dedupe_key(value: Option<&str>) -> Result<(), NatsError> {
     validate_identifier("dedupe_key", value, 128)
 }
 
-/// A subject name, built only from a validated identifier. Used for the run log stream the API
-/// server owns; the web tier names the subject but does not subscribe to it — log events reach
-/// the browser through the API server's `/ws`.
+// ---------------------------------------------------------------------------
+// Intent events: giw.<env>.<domain>.<event>
+// ---------------------------------------------------------------------------
+
+/// Root of every subject this org publishes.
+pub const SUBJECT_ROOT: &str = "giw";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NatsTransport {
-    pub subject: String,
+    pub url: String,
+    pub environment: String,
 }
 
 impl NatsTransport {
     #[must_use]
-    pub fn new(subject: impl Into<String>) -> Self {
+    pub fn new(url: impl Into<String>, environment: impl Into<String>) -> Self {
         Self {
-            subject: subject.into(),
+            url: url.into(),
+            environment: environment.into(),
         }
     }
 
-    /// The subject a run's log events are published on. Kept here so the name is written once and
-    /// matches `crate::persistence::Run::log_stream`.
+    /// `giw.production.runs.rerun-requested`
     #[must_use]
-    pub fn run_logs(run_id: &str) -> Option<Self> {
-        crate::present::is_run_id(run_id).then(|| Self::new(format!("run.{run_id}.logs")))
+    pub fn subject(&self, domain: &str, event: &str) -> String {
+        format!("{SUBJECT_ROOT}.{}.{}.{}", self.environment, domain, event)
     }
+}
+
+/// The envelope every publish carries. `causation_id` is the request id from
+/// ores-middleware, so a page action can be traced end to end.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Envelope<T> {
+    pub subject: String,
+    pub causation_id: String,
+    pub occurred_at: String,
+    pub payload: T,
+}
+
+impl<T> Envelope<T> {
+    #[must_use]
+    pub fn new(
+        subject: impl Into<String>,
+        causation_id: impl Into<String>,
+        occurred_at: impl Into<String>,
+        payload: T,
+    ) -> Self {
+        Self {
+            subject: subject.into(),
+            causation_id: causation_id.into(),
+            occurred_at: occurred_at.into(),
+            payload,
+        }
+    }
+}
+
+/// A subject segment must be a lowercase token: no wildcards, no separators, so
+/// a caller-supplied value can never widen a subscription.
+#[must_use]
+pub fn is_valid_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Builds a subject, refusing anything that is not a plain segment.
+#[must_use]
+pub fn subject(environment: &str, domain: &str, event: &str) -> Option<String> {
+    (is_valid_segment(environment) && is_valid_segment(domain) && is_valid_segment(event))
+        .then(|| format!("{SUBJECT_ROOT}.{environment}.{domain}.{event}"))
 }
 
 #[cfg(test)]
@@ -293,14 +358,36 @@ mod tests {
         assert!(!format!("{decoded:?}").contains("credential"));
     }
 
+    // -- intent events --
+
     #[test]
-    fn a_subject_is_only_built_from_an_identifier_that_is_one() {
+    fn subjects_follow_the_fleet_algebra() {
         assert_eq!(
-            NatsTransport::run_logs("01HZY7Q0J8").map(|t| t.subject),
-            Some("run.01HZY7Q0J8.logs".to_owned())
+            subject("production", "runs", "rerun-requested").as_deref(),
+            Some("giw.production.runs.rerun-requested")
         );
-        for bad in ["", "a.b", "a b", "*", ">", "../x"] {
-            assert_eq!(NatsTransport::run_logs(bad), None, "identifier {bad}");
-        }
+        assert_eq!(
+            NatsTransport::new("nats://localhost:4222", "staging").subject("orgs", "invite-sent"),
+            "giw.staging.orgs.invite-sent"
+        );
+    }
+
+    #[test]
+    fn a_wildcard_can_never_reach_a_subject() {
+        assert!(!is_valid_segment("*"));
+        assert!(!is_valid_segment(">"));
+        assert!(!is_valid_segment("runs.secret"));
+        assert!(!is_valid_segment("Runs"));
+        assert!(!is_valid_segment(""));
+        assert_eq!(subject("production", "runs", ">"), None);
+    }
+
+    #[test]
+    fn envelopes_serialize_with_the_fleet_field_names() {
+        let envelope = Envelope::new("giw.test.runs.x", "req_1", "2026-01-01T00:00:00Z", 7u32);
+        let json = serde_json::to_value(&envelope).expect("serializes");
+        assert_eq!(json["causationId"], "req_1");
+        assert_eq!(json["occurredAt"], "2026-01-01T00:00:00Z");
+        assert_eq!(json["payload"], 7);
     }
 }

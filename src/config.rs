@@ -1,264 +1,380 @@
 #![forbid(unsafe_code)]
-//! Configuration, read once at start-up from the environment Cloud Run and the k8s deployment
-//! actually give this service.
+
+//! Environment-only configuration. Every key is declared in `.cli-flags.toml`
+//! and mirrored into `generated/` by flags-2-env. Secrets are read once here and
+//! are never logged, never rendered into markup and never put in a URL.
 //!
-//! The variable names here are exactly the ones in
-//! `gha-indie-worker-infra/gcp/cloudrun/services.tf` for `google_cloud_run_v2_service.web`, plus
-//! the flags-2-env surface declared in `.cli-flags.toml`. Two consequences worth knowing:
-//!
-//! * `ORES_MIDDLEWARE_*` and `ORES_OTEL_*` are **not** read here. They belong to
-//!   `ores-middleware` and `ores-otel`, which read them from the same environment themselves;
-//!   re-reading them in the service is how the two copies drift apart.
-//! * `GHA_INDIE_WORKER_APEX` is the one name this file reads that services.tf does not set. It is
-//!   optional: when it is absent the apex is derived from `GHA_INDIE_WORKER_PUBLIC_URL`
-//!   (`https://app.indiebuild.dev` → `indiebuild.dev`), so the deployed configuration keeps
-//!   working unchanged and a developer can still point a laptop at another domain.
-//!
-//! [`WebConfig::from_map`] is the pure constructor: `main` hands it the environment after
-//! flags-2-env has resolved argv over it, and tests hand it a literal map.
-//! [`WebConfig::from_env`] is a convenience over the raw process environment.
+//! [`WebConfig::from_map`] is the pure constructor: `main` hands it the process
+//! environment with flags-2-env's resolved argv laid over it, and tests hand it
+//! a literal map. [`WebConfig::from_env`] is the same over the raw environment.
 
 use std::collections::BTreeMap;
-use std::fmt;
+use std::path::PathBuf;
 
-/// A value that must never be printed. `Debug` is implemented by hand precisely so that a
-/// `tracing::debug!(?config)` somewhere cannot leak a database URL into a log sink.
-#[derive(Clone, Default, PartialEq, Eq)]
-pub struct Secret(Option<String>);
+use thiserror::Error;
 
-impl Secret {
-    /// Read a secret from a resolved environment map. The raw value is kept, blank or not, so
-    /// that [`crate::server::startup_plan`] can refuse a blank one rather than silently dropping it.
-    #[must_use]
-    pub fn from_map(environment: &BTreeMap<String, String>, name: &str) -> Self {
-        Self(environment.get(name).cloned())
-    }
+use crate::hosts::Surface;
 
-    #[must_use]
-    pub fn from_env(name: &str) -> Self {
-        Self(std::env::var(name).ok())
-    }
+/// Default apex the four product hosts hang off.
+pub const DEFAULT_BASE_DOMAIN: &str = "indiebuild.dev";
+/// Default listen address (Cloud Run overrides with `PORT`).
+pub const DEFAULT_BIND: &str = "127.0.0.1:8081";
+/// Default cookie name. Host-scoped: no `Domain` attribute is ever emitted.
+pub const DEFAULT_SESSION_COOKIE: &str = "giw_session";
+/// Default CSRF cookie name (readable by htmx, hence not `HttpOnly`).
+pub const DEFAULT_CSRF_COOKIE: &str = "giw_csrf";
 
-    #[must_use]
-    pub fn expose(&self) -> Option<&str> {
-        self.0.as_deref()
-    }
-
-    /// Set to something other than whitespace.
-    #[must_use]
-    pub fn is_present(&self) -> bool {
-        self.0.as_deref().is_some_and(|value| !value.trim().is_empty())
-    }
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("{0} is required in production")]
+    MissingInProduction(&'static str),
+    #[error("{key} is invalid: {reason}")]
+    Invalid { key: &'static str, reason: &'static str },
 }
 
-impl fmt::Debug for Secret {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(if self.0.is_some() {
-            "Secret(set)"
-        } else {
-            "Secret(unset)"
-        })
-    }
+/// Which runtime posture the process is in. Mirrors `ORES_MIDDLEWARE_ENV`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Environment {
+    Development,
+    Test,
+    Staging,
+    Production,
 }
 
-/// Everything the web server needs to boot.
-#[derive(Clone, Debug)]
-pub struct WebConfig {
-    /// `GHA_INDIE_WORKER_WEB_BIND`
-    pub bind: String,
-    /// `GHA_INDIE_WORKER_PUBLIC_URL` — the canonical origin of the app shell.
-    pub public_url: String,
-    /// `GHA_INDIE_WORKER_API_URL` — where the JSON/WebSocket API lives. Falls back to
-    /// `GHA_INDIE_WORKER_API_HTTP_BASE`, then to `https://api.<apex>`.
-    pub api_url: String,
-    /// `GHA_INDIE_WORKER_API_HTTP_BASE` — the stateless-HTTP avenue, exactly as configured. Kept
-    /// raw so a blank value fails [`crate::server::startup_plan`] instead of vanishing.
-    pub api_http_base: Option<String>,
-    /// `GHA_INDIE_WORKER_NATS_URL` — the durable NATS avenue. Credentials live in the URL's
-    /// secret-store value, never in a CLI flag.
-    pub nats_url: Option<String>,
-    /// `GHA_INDIE_WORKER_APEX`, or derived from `public_url`.
-    pub apex: String,
-    /// `SHARED_AUTH_BASE_URL`
-    pub shared_auth_base_url: String,
-    /// `SHARED_AUTH_ISSUER` — checked exactly by `authz::project`.
-    pub shared_auth_issuer: String,
-    /// `SHARED_AUTH_AUDIENCE` — must be `indiebuild-web` for this binary.
-    pub shared_auth_audience: String,
-    /// `ORES_CHAT_BASE_URL`
-    pub ores_chat_base_url: Option<String>,
-    /// `ORES_OTEL_SERVICE_NAME`
-    pub otel_service_name: String,
-
-    /// `DATABASE_URL` (the canonical Neon project, read-only for this tier), or the flags-2-env
-    /// key `GHA_INDIE_WORKER_DATABASE_URL`.
-    pub database_url: Secret,
-    /// `AUTH_DATABASE_URL`
-    pub auth_database_url: Secret,
-    /// `SUPABASE_URL`
-    pub supabase_url: Secret,
-    /// `SUPABASE_ANON_KEY`
-    pub supabase_anon_key: Secret,
-    /// `SHARED_AUTH_INTROSPECTION_CREDENTIAL`
-    pub shared_auth_introspection_credential: Secret,
-    /// `GHA_INDIE_WORKER_EDGE_SHARED_SECRET` — proves a request came through our edge Worker.
-    pub edge_shared_secret: Secret,
-    /// `ORES_CHAT_SERVICE_TOKEN`
-    pub ores_chat_service_token: Secret,
-}
-
-impl WebConfig {
-    /// Build from a resolved environment map. Never panics: a missing optional variable degrades a
-    /// feature, and a missing required one is reported by [`Self::warnings`] at start-up rather
-    /// than at the first request.
+impl Environment {
     #[must_use]
-    pub fn from_map(environment: &BTreeMap<String, String>) -> Self {
-        let var = |name: &str| {
-            environment
-                .get(name)
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-        };
-        let public_url = var("GHA_INDIE_WORKER_PUBLIC_URL")
-            .unwrap_or_else(|| "http://127.0.0.1:8081".to_owned());
-        let apex = var("GHA_INDIE_WORKER_APEX")
-            .or_else(|| apex_from_public_url(&public_url))
-            .unwrap_or_else(|| "indiebuild.dev".to_owned());
-        let api_http_base = environment.get("GHA_INDIE_WORKER_API_HTTP_BASE").cloned();
-        let database_url = if environment.contains_key("DATABASE_URL") {
-            Secret::from_map(environment, "DATABASE_URL")
-        } else {
-            Secret::from_map(environment, "GHA_INDIE_WORKER_DATABASE_URL")
-        };
-        Self {
-            bind: environment
-                .get("GHA_INDIE_WORKER_WEB_BIND")
-                .cloned()
-                .unwrap_or_else(|| "127.0.0.1:8081".to_owned()),
-            api_url: var("GHA_INDIE_WORKER_API_URL")
-                .or_else(|| {
-                    api_http_base
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(str::to_owned)
-                })
-                .unwrap_or_else(|| format!("https://api.{apex}")),
-            api_http_base,
-            nats_url: environment.get("GHA_INDIE_WORKER_NATS_URL").cloned(),
-            apex,
-            public_url,
-            shared_auth_base_url: var("SHARED_AUTH_BASE_URL").unwrap_or_default(),
-            shared_auth_issuer: var("SHARED_AUTH_ISSUER").unwrap_or_default(),
-            shared_auth_audience: var("SHARED_AUTH_AUDIENCE")
-                .unwrap_or_else(|| "indiebuild-web".to_owned()),
-            ores_chat_base_url: var("ORES_CHAT_BASE_URL"),
-            otel_service_name: var("ORES_OTEL_SERVICE_NAME")
-                .unwrap_or_else(|| "gha-indie-worker-web-server".to_owned()),
-            database_url,
-            auth_database_url: Secret::from_map(environment, "AUTH_DATABASE_URL"),
-            supabase_url: Secret::from_map(environment, "SUPABASE_URL"),
-            supabase_anon_key: Secret::from_map(environment, "SUPABASE_ANON_KEY"),
-            shared_auth_introspection_credential: Secret::from_map(
-                environment,
-                "SHARED_AUTH_INTROSPECTION_CREDENTIAL",
-            ),
-            edge_shared_secret: Secret::from_map(environment, "GHA_INDIE_WORKER_EDGE_SHARED_SECRET"),
-            ores_chat_service_token: Secret::from_map(environment, "ORES_CHAT_SERVICE_TOKEN"),
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "production" | "prod" => Self::Production,
+            "staging" | "stage" => Self::Staging,
+            "test" | "testing" => Self::Test,
+            _ => Self::Development,
         }
     }
 
-    /// Read the raw process environment, without flags-2-env argv resolution.
+    #[must_use]
+    pub const fn is_production(self) -> bool {
+        matches!(self, Self::Production)
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Development => "development",
+            Self::Test => "test",
+            Self::Staging => "staging",
+            Self::Production => "production",
+        }
+    }
+}
+
+/// shared-auth wiring for the **product** instance. Admin bases are deliberately
+/// absent: this server must never accept an admin-instance token.
+#[derive(Clone, Debug, Default)]
+pub struct SharedAuthConfig {
+    pub base: Option<String>,
+    pub audience: Option<String>,
+    pub introspect_secret: Option<String>,
+}
+
+impl SharedAuthConfig {
+    #[must_use]
+    pub fn is_configured(&self) -> bool {
+        self.base.is_some()
+    }
+}
+
+/// Federated-JWT verification (shared-auth federates Supabase Auth and Neon Auth).
+#[derive(Clone, Debug, Default)]
+pub struct JwtConfig {
+    pub supabase_url: Option<String>,
+    pub supabase_jwks_url: Option<String>,
+    pub neon_auth_url: Option<String>,
+    pub neon_auth_jwks_url: Option<String>,
+    pub accepted_issuers: Vec<String>,
+    pub accepted_audiences: Vec<String>,
+    pub jwks_ttl_seconds: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct WebConfig {
+    pub environment: Environment,
+    pub bind: String,
+    pub base_domain: String,
+    /// Surface used for `localhost`/loopback so a single local process is usable.
+    pub dev_surface: Surface,
+    /// CIDRs whose `X-Forwarded-Host` / `X-Forwarded-For` we honour. Cloudflare.
+    pub trusted_proxy_cidrs: Vec<String>,
+
+    /// Kept from the skeleton: legacy alias for `api_http_base`.
+    pub api_base: Option<String>,
+    /// api-server origin for every write and for the WebSocket relay. A key that
+    /// is present but blank is kept blank so [`crate::server::startup_plan`]
+    /// refuses it instead of silently falling back to the default.
+    pub api_http_base: String,
+    /// `GHA_INDIE_WORKER_DATABASE_URL`, kept raw for the startup plan.
+    pub database_url: Option<String>,
+    /// Read-only canonical pool. Reads only; this process never runs DDL.
+    pub database_url_canonical: Option<String>,
+
+    pub assets_dir: PathBuf,
+    pub release_manifest_url: Option<String>,
+
+    pub session_secret: Option<String>,
+    pub session_cookie_name: String,
+    pub csrf_cookie_name: String,
+    pub session_ttl_seconds: u64,
+
+    pub shared_auth: SharedAuthConfig,
+    pub jwt: JwtConfig,
+
+    pub chat_enabled: bool,
+    pub rate_limit_hmac_secret: Option<String>,
+
+    pub tcp_bind: Option<String>,
+    /// `GHA_INDIE_WORKER_NATS_URL`, kept raw for the startup plan. Credentials
+    /// stay in the secret store that supplies it, never in a CLI flag.
+    pub nats_url: Option<String>,
+
+    /// Kept from the skeleton.
+    pub json: bool,
+}
+
+/// A resolved environment, read by key. Every lookup names its key as a string literal so
+/// `scripts/ci-policy.py` can prove each key is declared in `.cli-flags.toml`.
+struct Env<'a>(&'a BTreeMap<String, String>);
+
+impl Env<'_> {
+    /// Trimmed, and absent when blank.
+    fn var(&self, key: &str) -> Option<String> {
+        self.0
+            .get(key)
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Exactly as configured, blank included.
+    fn raw(&self, key: &str) -> Option<String> {
+        self.0.get(key).cloned()
+    }
+
+    fn flag(&self, key: &str, default: bool) -> bool {
+        match self.var(key).map(|v| v.to_ascii_lowercase()) {
+            Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
+            None => default,
+        }
+    }
+
+    fn number(&self, key: &str, default: u64) -> u64 {
+        self.var(key).and_then(|v| v.parse().ok()).unwrap_or(default)
+    }
+
+    fn csv(&self, key: &str) -> Vec<String> {
+        self.var(key)
+            .map(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl WebConfig {
+    /// Reads the process environment. Never fails, so a misconfigured value is
+    /// reported by [`Self::validate`] with the key name rather than by a panic.
     #[must_use]
     pub fn from_env() -> Self {
         Self::from_map(&std::env::vars().collect())
     }
 
-    /// Cookies are `Secure` unless the public origin is plain http, which only a laptop is.
+    /// Builds the configuration from a resolved environment map. Pure.
     #[must_use]
-    pub fn cookies_are_secure(&self) -> bool {
-        self.public_url.starts_with("https://")
+    pub fn from_map(environment: &BTreeMap<String, String>) -> Self {
+        let env = Env(environment);
+        let environment = Environment::parse(
+            &env.var("GHA_INDIE_WORKER_ENV")
+                .or_else(|| env.var("ORES_MIDDLEWARE_ENV"))
+                .or_else(|| env.var("APP_ENV"))
+                .unwrap_or_else(|| "development".into()),
+        );
+        // Cloud Run injects PORT; honour it before the explicit bind.
+        let bind = env
+            .var("GHA_INDIE_WORKER_WEB_BIND")
+            .or_else(|| env.var("PORT").map(|p| format!("0.0.0.0:{p}")))
+            .unwrap_or_else(|| DEFAULT_BIND.to_owned());
+        let api_base = env.var("GHA_INDIE_WORKER_API_BASE");
+        let api_http_base = match env.raw("GHA_INDIE_WORKER_API_HTTP_BASE") {
+            Some(blank) if blank.trim().is_empty() => blank,
+            _ => env
+                .var("GHA_INDIE_WORKER_API_HTTP_BASE")
+                .or_else(|| api_base.clone())
+                .unwrap_or_else(|| "http://127.0.0.1:8080".to_owned()),
+        };
+
+        Self {
+            environment,
+            bind,
+            base_domain: env
+                .var("GHA_INDIE_WORKER_BASE_DOMAIN")
+                .unwrap_or_else(|| DEFAULT_BASE_DOMAIN.to_owned()),
+            dev_surface: env
+                .var("GHA_INDIE_WORKER_DEV_SURFACE")
+                .and_then(|v| Surface::from_label(&v))
+                .unwrap_or(Surface::App),
+            trusted_proxy_cidrs: {
+                let configured = env.csv("GHA_INDIE_WORKER_TRUSTED_PROXY_CIDRS");
+                if configured.is_empty() {
+                    crate::hosts::CLOUDFLARE_CIDRS.iter().map(|s| (*s).to_owned()).collect()
+                } else {
+                    configured
+                }
+            },
+            api_base,
+            api_http_base,
+            database_url: env.raw("GHA_INDIE_WORKER_DATABASE_URL"),
+            database_url_canonical: env
+                .var("DATABASE_URL_CANONICAL")
+                .or_else(|| env.var("GHA_INDIE_WORKER_DATABASE_URL_CANONICAL")),
+            assets_dir: env
+                .var("GHA_INDIE_WORKER_ASSETS_DIR")
+                .map_or_else(|| PathBuf::from("assets"), PathBuf::from),
+            release_manifest_url: env.var("GHA_INDIE_WORKER_RELEASE_MANIFEST_URL"),
+            session_secret: env.var("GHA_INDIE_WORKER_SESSION_SECRET"),
+            session_cookie_name: env
+                .var("GHA_INDIE_WORKER_SESSION_COOKIE_NAME")
+                .unwrap_or_else(|| DEFAULT_SESSION_COOKIE.to_owned()),
+            csrf_cookie_name: env
+                .var("GHA_INDIE_WORKER_CSRF_COOKIE_NAME")
+                .unwrap_or_else(|| DEFAULT_CSRF_COOKIE.to_owned()),
+            session_ttl_seconds: env.number("GHA_INDIE_WORKER_SESSION_TTL_SECONDS", 60 * 60 * 12),
+            shared_auth: SharedAuthConfig {
+                base: env.var("SHARED_AUTH_BASE"),
+                audience: env.var("SHARED_AUTH_AUDIENCE"),
+                introspect_secret: env.var("SHARED_AUTH_INTROSPECT_SECRET"),
+            },
+            jwt: JwtConfig {
+                supabase_url: env.var("SUPABASE_URL"),
+                supabase_jwks_url: env.var("SUPABASE_JWKS_URL").or_else(|| {
+                    env.var("SUPABASE_URL")
+                        .map(|u| format!("{}/auth/v1/.well-known/jwks.json", u.trim_end_matches('/')))
+                }),
+                neon_auth_url: env.var("NEON_AUTH_URL"),
+                neon_auth_jwks_url: env.var("NEON_AUTH_JWKS_URL"),
+                accepted_issuers: env.csv("GHA_INDIE_WORKER_JWT_ISSUERS"),
+                accepted_audiences: {
+                    let configured = env.csv("GHA_INDIE_WORKER_JWT_AUDIENCES");
+                    if configured.is_empty() {
+                        env.var("SHARED_AUTH_AUDIENCE").into_iter().collect()
+                    } else {
+                        configured
+                    }
+                },
+                jwks_ttl_seconds: env.number("GHA_INDIE_WORKER_JWKS_TTL_SECONDS", 300),
+            },
+            chat_enabled: env.flag("GHA_INDIE_WORKER_CHAT_ENABLED", true),
+            rate_limit_hmac_secret: env
+                .var("GHA_INDIE_WORKER_RATE_LIMIT_HMAC_SECRET")
+                .or_else(|| env.var("ORES_MIDDLEWARE_RATE_LIMIT_HMAC_SECRET")),
+            tcp_bind: env.var("GHA_INDIE_WORKER_WEB_TCP_BIND"),
+            nats_url: env.raw("GHA_INDIE_WORKER_NATS_URL"),
+            json: env.flag("GHA_INDIE_WORKER_JSON", false),
+        }
     }
 
-    /// The `Domain` attribute for session and CSRF cookies: the apex, so that signing in at
-    /// `user.` is visible at `app.`.
+    /// A self-contained configuration for unit and HTTP tests. No network, no
+    /// database, no secrets from the environment.
     #[must_use]
-    pub fn cookie_domain(&self) -> Option<&str> {
-        if self.cookies_are_secure() {
-            Some(self.apex.as_str())
+    pub fn for_tests() -> Self {
+        Self {
+            environment: Environment::Test,
+            bind: DEFAULT_BIND.to_owned(),
+            base_domain: DEFAULT_BASE_DOMAIN.to_owned(),
+            dev_surface: Surface::App,
+            trusted_proxy_cidrs: vec!["127.0.0.0/8".into(), "::1/128".into()],
+            api_base: None,
+            api_http_base: "http://127.0.0.1:8080".to_owned(),
+            database_url: None,
+            database_url_canonical: None,
+            assets_dir: PathBuf::from("assets"),
+            release_manifest_url: None,
+            session_secret: Some("test-session-secret-not-for-production".to_owned()),
+            session_cookie_name: DEFAULT_SESSION_COOKIE.to_owned(),
+            csrf_cookie_name: DEFAULT_CSRF_COOKIE.to_owned(),
+            session_ttl_seconds: 3_600,
+            shared_auth: SharedAuthConfig::default(),
+            jwt: JwtConfig {
+                jwks_ttl_seconds: 300,
+                ..JwtConfig::default()
+            },
+            chat_enabled: true,
+            rate_limit_hmac_secret: Some("test-rate-limit-secret".to_owned()),
+            tcp_bind: None,
+            nats_url: None,
+            json: false,
+        }
+    }
+
+    /// Fail closed on anything that would silently weaken production.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !self.bind.contains(':') {
+            return Err(ConfigError::Invalid {
+                key: "GHA_INDIE_WORKER_WEB_BIND",
+                reason: "expected host:port",
+            });
+        }
+        if self.base_domain.is_empty() || self.base_domain.contains('/') {
+            return Err(ConfigError::Invalid {
+                key: "GHA_INDIE_WORKER_BASE_DOMAIN",
+                reason: "expected a bare apex domain",
+            });
+        }
+        if self.environment.is_production() {
+            if self.session_secret.is_none() {
+                return Err(ConfigError::MissingInProduction("GHA_INDIE_WORKER_SESSION_SECRET"));
+            }
+            if !self.api_http_base.starts_with("https://") {
+                return Err(ConfigError::Invalid {
+                    key: "GHA_INDIE_WORKER_API_HTTP_BASE",
+                    reason: "production requires https://",
+                });
+            }
+            if !self.shared_auth.is_configured() {
+                return Err(ConfigError::MissingInProduction("SHARED_AUTH_BASE"));
+            }
+            if self.rate_limit_hmac_secret.is_none() {
+                return Err(ConfigError::MissingInProduction(
+                    "GHA_INDIE_WORKER_RATE_LIMIT_HMAC_SECRET",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `https://api.indiebuild.dev/v1/ws` → the WebSocket origin of the api-server.
+    #[must_use]
+    pub fn api_ws_base(&self) -> String {
+        let base = self.api_http_base.trim_end_matches('/');
+        if let Some(rest) = base.strip_prefix("https://") {
+            format!("wss://{rest}")
+        } else if let Some(rest) = base.strip_prefix("http://") {
+            format!("ws://{rest}")
         } else {
-            None
+            format!("wss://{base}")
         }
     }
 
-    /// Whether this process is talking to a real shared-auth deployment. When false the magic-link
-    /// flow runs against the in-process development stub and says so on every page.
+    /// Cookies are only marked `Secure` where TLS actually exists.
     #[must_use]
-    pub fn shared_auth_configured(&self) -> bool {
-        !self.shared_auth_base_url.is_empty()
-            && !self.shared_auth_issuer.is_empty()
-            && self.shared_auth_introspection_credential.is_present()
+    pub const fn cookies_secure(&self) -> bool {
+        !matches!(self.environment, Environment::Development | Environment::Test)
     }
 
-    /// Configuration problems worth shouting about at boot, in the order they will bite.
     #[must_use]
-    pub fn warnings(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        if !self.shared_auth_configured() {
-            out.push(
-                "shared-auth is not configured (SHARED_AUTH_BASE_URL / SHARED_AUTH_ISSUER / \
-                 SHARED_AUTH_INTROSPECTION_CREDENTIAL); the development sign-in stub is active"
-                    .to_owned(),
-            );
-        }
-        if self.shared_auth_audience != "indiebuild-web" {
-            out.push(format!(
-                "SHARED_AUTH_AUDIENCE is {:?}; this binary is the web surface and should present \
-                 indiebuild-web",
-                self.shared_auth_audience
-            ));
-        }
-        if !self.database_url.is_present() {
-            out.push(
-                "DATABASE_URL is unset; read-only projections fall back to fixtures".to_owned(),
-            );
-        }
-        if !self.edge_shared_secret.is_present() {
-            out.push(
-                "GHA_INDIE_WORKER_EDGE_SHARED_SECRET is unset; requests cannot be proven to have \
-                 come through the edge Worker"
-                    .to_owned(),
-            );
-        }
-        if !self.cookies_are_secure() {
-            out.push(format!(
-                "GHA_INDIE_WORKER_PUBLIC_URL is {:?}; cookies will be issued without Secure",
-                self.public_url
-            ));
-        }
-        out
-    }
-}
-
-/// `https://app.indiebuild.dev` → `indiebuild.dev`. A bare apex (`https://indiebuild.dev`) is
-/// returned unchanged, and anything with fewer than two labels is not an apex at all.
-fn apex_from_public_url(public_url: &str) -> Option<String> {
-    let rest = public_url.split("://").nth(1).unwrap_or(public_url);
-    let host = rest
-        .split('/')
-        .next()?
-        .split(':')
-        .next()?
-        .trim_end_matches('.');
-    if host.is_empty() || host.parse::<std::net::IpAddr>().is_ok() {
-        return None;
-    }
-    let labels: Vec<&str> = host.split('.').collect();
-    match labels.as_slice() {
-        [] | [_] => None,
-        [_, _] => Some(host.to_ascii_lowercase()),
-        // Drop exactly one leading label: `app.indiebuild.dev` is a surface of `indiebuild.dev`.
-        [_, tail @ ..] => Some(tail.join(".").to_ascii_lowercase()),
+    pub fn origin(&self, surface: Surface) -> String {
+        surface.origin(&self.base_domain)
     }
 }
 
@@ -266,68 +382,70 @@ fn apex_from_public_url(public_url: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_apex_is_derived_from_the_public_url_when_it_is_not_set() {
-        assert_eq!(
-            apex_from_public_url("https://app.indiebuild.dev").as_deref(),
-            Some("indiebuild.dev")
-        );
-        assert_eq!(
-            apex_from_public_url("https://APP.IndieBuild.dev/").as_deref(),
-            Some("indiebuild.dev")
-        );
-        assert_eq!(
-            apex_from_public_url("https://indiebuild.dev").as_deref(),
-            Some("indiebuild.dev")
-        );
-        assert_eq!(apex_from_public_url("http://127.0.0.1:8081"), None);
-        assert_eq!(apex_from_public_url("http://localhost:8081"), None);
+    fn map(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
     }
 
     #[test]
-    fn secrets_never_print_themselves() {
-        let secret = Secret(Some("postgres://user:password@host/db".to_owned()));
-        assert_eq!(format!("{secret:?}"), "Secret(set)");
-        assert_eq!(format!("{:?}", Secret(None)), "Secret(unset)");
-        assert_eq!(secret.expose(), Some("postgres://user:password@host/db"));
-        assert!(!Secret(Some("   ".to_owned())).is_present());
+    fn websocket_base_follows_the_api_scheme() {
+        let mut config = WebConfig::for_tests();
+        config.api_http_base = "https://api.indiebuild.dev/".into();
+        assert_eq!(config.api_ws_base(), "wss://api.indiebuild.dev");
+        config.api_http_base = "http://127.0.0.1:8080".into();
+        assert_eq!(config.api_ws_base(), "ws://127.0.0.1:8080");
     }
 
     #[test]
-    fn a_plain_http_origin_disables_secure_cookies_and_the_domain_attribute() {
-        let mut config = WebConfig::from_map(&BTreeMap::new());
-        config.public_url = "http://127.0.0.1:8081".to_owned();
-        assert!(!config.cookies_are_secure());
-        assert_eq!(config.cookie_domain(), None);
-        config.public_url = "https://app.indiebuild.dev".to_owned();
-        config.apex = "indiebuild.dev".to_owned();
-        assert!(config.cookies_are_secure());
-        assert_eq!(config.cookie_domain(), Some("indiebuild.dev"));
+    fn production_requires_the_session_secret() {
+        let mut config = WebConfig::for_tests();
+        config.environment = Environment::Production;
+        config.session_secret = None;
+        assert!(
+            matches!(config.validate(), Err(ConfigError::MissingInProduction(key)) if key.ends_with("SESSION_SECRET"))
+        );
     }
 
     #[test]
-    fn flags_2_env_keys_and_deployment_keys_both_reach_the_config() {
-        let environment = BTreeMap::from([
-            ("GHA_INDIE_WORKER_WEB_BIND".to_owned(), "0.0.0.0:8080".to_owned()),
-            ("GHA_INDIE_WORKER_API_HTTP_BASE".to_owned(), "http://api:8080".to_owned()),
-            ("GHA_INDIE_WORKER_NATS_URL".to_owned(), "nats://127.0.0.1:4222".to_owned()),
-            ("GHA_INDIE_WORKER_DATABASE_URL".to_owned(), "postgres://flag".to_owned()),
-            ("GHA_INDIE_WORKER_PUBLIC_URL".to_owned(), "https://app.indiebuild.dev".to_owned()),
-        ]);
-        let config = WebConfig::from_map(&environment);
+    fn test_configuration_validates() {
+        assert!(WebConfig::for_tests().validate().is_ok());
+    }
+
+    #[test]
+    fn cookies_are_insecure_only_outside_deployed_environments() {
+        let mut config = WebConfig::for_tests();
+        assert!(!config.cookies_secure());
+        config.environment = Environment::Production;
+        assert!(config.cookies_secure());
+    }
+
+    #[test]
+    fn from_map_reads_flags_2_env_and_deployment_keys_alike() {
+        let config = WebConfig::from_map(&map(&[
+            ("GHA_INDIE_WORKER_WEB_BIND", "0.0.0.0:8080"),
+            ("GHA_INDIE_WORKER_API_HTTP_BASE", "https://api.indiebuild.dev"),
+            ("GHA_INDIE_WORKER_NATS_URL", "nats://127.0.0.1:4222"),
+            ("GHA_INDIE_WORKER_DATABASE_URL", "postgres://flag"),
+            ("DATABASE_URL_CANONICAL", "postgres://canonical"),
+            ("GHA_INDIE_WORKER_DEV_SURFACE", "org"),
+            ("GHA_INDIE_WORKER_ENV", "production"),
+        ]));
         assert_eq!(config.bind, "0.0.0.0:8080");
-        assert_eq!(config.api_http_base.as_deref(), Some("http://api:8080"));
-        assert_eq!(config.api_url, "http://api:8080");
+        assert_eq!(config.api_http_base, "https://api.indiebuild.dev");
         assert_eq!(config.nats_url.as_deref(), Some("nats://127.0.0.1:4222"));
-        assert_eq!(config.database_url.expose(), Some("postgres://flag"));
-        assert_eq!(config.apex, "indiebuild.dev");
+        assert_eq!(config.database_url.as_deref(), Some("postgres://flag"));
+        assert_eq!(config.database_url_canonical.as_deref(), Some("postgres://canonical"));
+        assert_eq!(config.dev_surface, Surface::Org);
+        assert!(config.environment.is_production());
+    }
 
-        let mut with_canonical = environment;
-        with_canonical.insert("DATABASE_URL".to_owned(), "postgres://canonical".to_owned());
-        assert_eq!(
-            WebConfig::from_map(&with_canonical).database_url.expose(),
-            Some("postgres://canonical"),
-            "the deployment's DATABASE_URL wins over the flags-2-env key"
-        );
+    #[test]
+    fn a_blank_api_base_is_kept_blank_rather_than_defaulted() {
+        let blank = WebConfig::from_map(&map(&[("GHA_INDIE_WORKER_API_HTTP_BASE", "  ")]));
+        assert_eq!(blank.api_http_base.trim(), "");
+        let unset = WebConfig::from_map(&map(&[]));
+        assert_eq!(unset.api_http_base, "http://127.0.0.1:8080");
     }
 }

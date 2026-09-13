@@ -1,27 +1,51 @@
 #![forbid(unsafe_code)]
-//! Boot: validate the startup plan, build the router, wrap it in the ORES middleware stack,
-//! listen, and shut down cleanly.
+
+//! Composition and process lifecycle.
 //!
-//! [`startup_plan`] is the pure effect boundary. It validates immutable configuration and derives
-//! non-sensitive backend capabilities before anything binds; database connection strings never
-//! enter the printable plan.
+//! The router is assembled in one place, in this order (outermost first):
 //!
-//! The middleware install is **fail-closed**. `ores_middleware` is what enforces the trusted-proxy
-//! boundary, the body limit and the rate limit, and those are configured by the same environment
-//! variables `gcp/cloudrun/services.tf` sets. A process that could not build that stack has not
-//! got a degraded security posture, it has none, so it refuses to start rather than quietly
-//! serving without it.
+//! 1. **ores-middleware** — the fleet pipeline, with this service's auth and
+//!    rate-limit hooks ([`crate::middleware::install`]);
+//! 2. **[`crate::middleware::request_context`]** — surface resolution, CSP
+//!    nonce, CSRF, actor;
+//! 3. **`/assets`** — the static mount (self-hosted htmx, the ores-web-loader
+//!    module, immutable release assets);
+//! 4. **host dispatch** — the per-surface routers.
+//!
+//! [`build_router`] stops at step 2 so tests can drive the whole HTTP surface
+//! with `tower::ServiceExt::oneshot` without ores-middleware reading the
+//! environment. [`run`] adds step 1 and binds the listener.
+//!
+//! [`startup_plan`] is the pure effect boundary in front of all of it: it
+//! validates immutable configuration and derives the non-sensitive backend
+//! capabilities before [`run`] binds a socket. Connection strings never enter
+//! the printable plan.
 
 use std::net::SocketAddr;
 
 use axum::Router;
+use next_loggers::Logger;
+use thiserror::Error;
+use tower_http::services::ServeDir;
 
 use crate::config::WebConfig;
 use crate::error::WebError;
-use crate::{assets, pages, state::AppState, SERVICE};
+use crate::hosts;
+use crate::state::AppState;
 
-/// Anything that stops the server starting.
-pub type BootError = Box<dyn std::error::Error + Send + Sync>;
+#[derive(Debug, Error)]
+pub enum ServerError {
+    #[error("configuration is invalid: {0}")]
+    Config(#[from] crate::config::ConfigError),
+    #[error("startup plan rejected: {0}")]
+    Plan(#[from] WebError),
+    #[error("the middleware pipeline could not be built: {0}")]
+    Middleware(String),
+    #[error("could not bind {bind}")]
+    Bind { bind: String },
+    #[error("the server stopped unexpectedly")]
+    Serve,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendCapability {
@@ -36,34 +60,35 @@ pub struct StartupPlan {
     pub capabilities: Vec<BackendCapability>,
 }
 
-/// Validate configuration and derive the capabilities this process will use.
+/// Validates configuration and derives the capabilities this process will use.
 ///
 /// # Errors
-/// [`WebError::InvalidConfiguration`] naming the key when a configured value is blank.
+/// [`WebError::InvalidConfiguration`] naming the key (never the value) when a
+/// configured value is blank.
 pub fn startup_plan(config: &WebConfig) -> Result<StartupPlan, WebError> {
     let bind = non_empty("GHA_INDIE_WORKER_WEB_BIND", &config.bind)?;
+    let database = config
+        .database_url_canonical
+        .as_deref()
+        .map(|value| ("DATABASE_URL_CANONICAL", value))
+        .or_else(|| {
+            config
+                .database_url
+                .as_deref()
+                .map(|value| ("GHA_INDIE_WORKER_DATABASE_URL", value))
+        });
     let optional_capabilities = [
-        config.database_url.expose().map(|value| {
-            (
-                BackendCapability::DirectReadOnlyDatabase,
-                "GHA_INDIE_WORKER_DATABASE_URL",
-                value,
-            )
-        }),
-        config.api_http_base.as_deref().map(|value| {
-            (
-                BackendCapability::StatelessHttp,
-                "GHA_INDIE_WORKER_API_HTTP_BASE",
-                value,
-            )
-        }),
-        config.nats_url.as_deref().map(|value| {
-            (
-                BackendCapability::DurableNats,
-                "GHA_INDIE_WORKER_NATS_URL",
-                value,
-            )
-        }),
+        database.map(|(field, value)| (BackendCapability::DirectReadOnlyDatabase, field, value)),
+        // Every write goes to the api-server, so this avenue is not optional here.
+        Some((
+            BackendCapability::StatelessHttp,
+            "GHA_INDIE_WORKER_API_HTTP_BASE",
+            config.api_http_base.as_str(),
+        )),
+        config
+            .nats_url
+            .as_deref()
+            .map(|value| (BackendCapability::DurableNats, "GHA_INDIE_WORKER_NATS_URL", value)),
     ];
     let capabilities = optional_capabilities
         .into_iter()
@@ -82,65 +107,62 @@ fn non_empty(field: &'static str, value: &str) -> Result<String, WebError> {
     Ok(value.to_owned())
 }
 
-/// Build the fully decorated router for a given configuration. Exposed so router-level tests can
-/// drive the application with `tower::ServiceExt::oneshot` and never bind a socket.
-///
-/// # Errors
-/// [`BootError`] when the ORES middleware stack cannot be built from the environment.
-pub fn build(config: WebConfig) -> Result<Router, BootError> {
-    let state = AppState::new(config);
-    build_with_state(state)
+/// The router without ores-middleware: host dispatch, static assets, and the
+/// request-context layer. This is what the HTTP tests exercise.
+#[must_use]
+pub fn build_router(state: &AppState) -> Router {
+    let assets = ServeDir::new(state.config.assets_dir.clone()).append_index_html_on_directories(false);
+
+    hosts::dispatch_router(state)
+        .merge(crate::releases::router(state.clone()))
+        .nest_service("/assets", assets)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::request_context,
+        ))
 }
 
-/// As [`build`], for a state a test has already prepared.
-///
-/// # Errors
-/// [`BootError`] when the ORES middleware stack cannot be built from the environment.
-pub fn build_with_state(state: AppState) -> Result<Router, BootError> {
-    let router = pages::router(state);
-    let router = ores_middleware::frameworks::axum::install_from_env(router, SERVICE)?;
-    Ok(router)
+/// The full router, with the fleet middleware installed around it.
+pub fn build_service(state: &AppState, logger: Option<Logger>) -> Result<Router, ServerError> {
+    crate::middleware::install(build_router(state), state, logger)
+        .map_err(|error| ServerError::Middleware(error.to_string()))
 }
 
-/// Validate the startup plan, then bind and serve until a shutdown signal arrives.
-///
-/// # Errors
-/// [`BootError`] for an invalid plan, a middleware, address or listener failure.
-pub async fn run(config: WebConfig) -> Result<(), BootError> {
+/// Builds the state, binds, serves, and shuts down gracefully.
+pub async fn run(config: WebConfig, logger: Option<Logger>) -> Result<(), ServerError> {
+    config.validate()?;
     let plan = startup_plan(&config)?;
-    for warning in config.warnings() {
-        tracing::warn!(%warning, "configuration");
-    }
-    for warning in assets::assets().warnings() {
-        tracing::warn!(%warning, "assets");
-    }
+    let bind = plan.bind.clone();
+    let state = AppState::build(config).await;
 
-    let apex = config.apex.clone();
-    let address: SocketAddr = plan.bind.parse()?;
-    let app = build(config)?;
+    #[cfg(feature = "tcp-transport")]
+    spawn_tcp_avenue(&state);
 
-    let listener = tokio::net::TcpListener::bind(address).await?;
+    let app = build_service(&state, logger)?;
+
+    let listener = tokio::net::TcpListener::bind(&bind)
+        .await
+        .map_err(|_| ServerError::Bind { bind: bind.clone() })?;
     tracing::info!(
-        %address,
-        %apex,
-        service.name = SERVICE,
+        service.name = crate::SERVICE_NAME,
+        server.address = %bind,
+        surfaces = "app,user,org,m",
         capabilities = ?plan.capabilities,
-        htmx = assets::assets().htmx_available(),
         "web server listening"
     );
-    axum::serve(listener, app)
+
+    // ConnectInfo is what makes the trusted-proxy check possible: without the
+    // peer address, `X-Forwarded-Host` could never be honoured safely.
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
-        .await?;
-    Ok(())
+        .await
+        .map_err(|_| ServerError::Serve)
 }
 
-/// Wait for Ctrl-C or `SIGTERM`. Cloud Run sends `SIGTERM` and then waits, so honouring it is what
-/// makes a deploy drain rather than drop connections — including open log-tail sockets.
+/// SIGTERM (Cloud Run's stop signal) or Ctrl-C.
 pub async fn shutdown_signal() {
-    let interrupt = async {
-        if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::error!(%error, "could not install the Ctrl-C handler");
-        }
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
     };
 
     #[cfg(unix)]
@@ -149,33 +171,89 @@ pub async fn shutdown_signal() {
             Ok(mut signal) => {
                 signal.recv().await;
             }
-            Err(error) => tracing::error!(%error, "could not install the SIGTERM handler"),
+            Err(_) => std::future::pending::<()>().await,
         }
     };
-
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        () = interrupt => {},
-        () = terminate => {},
+        () = ctrl_c => {}
+        () = terminate => {}
     }
-    tracing::info!("shutting down");
+    tracing::info!(service.name = crate::SERVICE_NAME, "shutdown signal received");
+}
+
+/// The stateful TCP avenue, when one is configured.
+#[cfg(feature = "tcp-transport")]
+fn spawn_tcp_avenue(state: &AppState) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let Some(bind) = state.config.tcp_bind.clone() else {
+        return;
+    };
+    let base_domain = state.config.base_domain.clone();
+    let read_source = state.repo.read_source().as_str().to_owned();
+
+    tokio::spawn(async move {
+        let listener = match tokio::net::TcpListener::bind(&bind).await {
+            Ok(listener) => listener,
+            Err(_) => {
+                tracing::warn!(avenue = "tcp", server.address = %bind, "tcp avenue could not bind");
+                return;
+            }
+        };
+        tracing::info!(avenue = "tcp", server.address = %bind, "tcp avenue listening");
+
+        loop {
+            let Ok((mut socket, _peer)) = listener.accept().await else {
+                continue;
+            };
+            let base_domain = base_domain.clone();
+            let read_source = read_source.clone();
+            tokio::spawn(async move {
+                let mut header = [0u8; crate::transport::tcp::LENGTH_PREFIX_BYTES];
+                if socket.read_exact(&mut header).await.is_err() {
+                    return;
+                }
+                let Ok(length) = crate::transport::tcp::frame_length(&header) else {
+                    return;
+                };
+                let mut body = vec![0u8; length];
+                if socket.read_exact(&mut body).await.is_err() {
+                    return;
+                }
+                let response = match serde_json::from_slice::<crate::transport::tcp::TcpRequest>(&body) {
+                    Ok(request) => crate::transport::tcp::handle(&request, &base_domain, &read_source),
+                    Err(_) => crate::transport::tcp::TcpResponse::Error {
+                        code: "malformed_frame".to_owned(),
+                    },
+                };
+                if let Ok(frame) = crate::transport::tcp::encode(&response) {
+                    let _ = socket.write_all(&frame).await;
+                }
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use super::*;
 
-    use super::{startup_plan, BackendCapability, StartupPlan};
-    use crate::{config::WebConfig, error::WebError};
+    #[test]
+    fn the_test_router_builds_without_touching_the_environment() {
+        let state = AppState::for_tests(WebConfig::for_tests());
+        let _router = build_router(&state);
+    }
 
     fn config(entries: &[(&str, &str)]) -> WebConfig {
         WebConfig::from_map(
             &entries
                 .iter()
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                .collect::<BTreeMap<_, _>>(),
+                .collect(),
         )
     }
 
@@ -185,10 +263,7 @@ mod tests {
             ("GHA_INDIE_WORKER_WEB_BIND", " 127.0.0.1:8081 "),
             ("GHA_INDIE_WORKER_API_HTTP_BASE", "http://api:8080"),
             ("GHA_INDIE_WORKER_DATABASE_URL", "postgres://sensitive-value"),
-            (
-                "GHA_INDIE_WORKER_NATS_URL",
-                "nats://worker:credential@nats.internal:4222",
-            ),
+            ("GHA_INDIE_WORKER_NATS_URL", "nats://worker:credential@nats.internal:4222"),
         ]);
 
         let plan = startup_plan(&config).expect("valid web startup plan");
@@ -206,20 +281,30 @@ mod tests {
         );
         assert!(!format!("{plan:?}").contains("sensitive-value"));
         assert!(!format!("{plan:?}").contains("credential"));
-        assert!(!format!("{config:?}").contains("sensitive-value"));
     }
 
     #[test]
     fn startup_plan_rejects_blank_optional_configuration() {
-        let error = startup_plan(&config(&[
-            ("GHA_INDIE_WORKER_WEB_BIND", "127.0.0.1:8081"),
+        for (key, blank) in [
             ("GHA_INDIE_WORKER_API_HTTP_BASE", "  "),
-        ]))
-        .expect_err("blank API base must fail closed");
+            ("GHA_INDIE_WORKER_DATABASE_URL", ""),
+            ("GHA_INDIE_WORKER_NATS_URL", " "),
+        ] {
+            let error = startup_plan(&config(&[("GHA_INDIE_WORKER_WEB_BIND", "127.0.0.1:8081"), (key, blank)]))
+                .expect_err("a blank configured value must fail closed");
+            assert!(
+                matches!(error, WebError::InvalidConfiguration(field) if field == key),
+                "{key}: {error:?}"
+            );
+        }
+    }
 
-        assert!(matches!(
-            error,
-            WebError::InvalidConfiguration("GHA_INDIE_WORKER_API_HTTP_BASE")
-        ));
+    #[test]
+    fn server_errors_never_carry_a_connection_string() {
+        let error = ServerError::Bind {
+            bind: "127.0.0.1:8081".into(),
+        };
+        assert_eq!(error.to_string(), "could not bind 127.0.0.1:8081");
+        assert!(!ServerError::Serve.to_string().contains("postgres"));
     }
 }

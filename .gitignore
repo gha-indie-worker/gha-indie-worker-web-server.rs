@@ -31,3 +31,13 @@ tmp/worktrees
 temp/worktrees
 # typespec-json-schema-validator comparison evidence (generated; never an authority)
 .typespec-json-schema-validator/
+
+# Vendored browser assets are fetched (and pin-verified) by scripts/vendor-assets.sh, not committed.
+/assets/vendor/htmx.min.js
+/assets/releases/*
+!/assets/releases/.gitkeep
+
+# Package-local installs must never be published.
+node_modules/
+# Executable services need a reviewed lockfile for the existing --locked CI gate.
+!Cargo.lock

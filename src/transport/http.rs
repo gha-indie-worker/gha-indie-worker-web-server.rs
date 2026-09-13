@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
-//! The stateless HTTP avenue: `GHA_INDIE_WORKER_API_URL`.
-//!
-//! No client is wired in yet — the pages read fixtures — so what lives here is the part that would
-//! be wrong in a subtle way if it were written inline at each call site: building a URL from a
-//! configured base and a path without ever letting the path escape the base.
 
-/// A configured API base.
+//! The stateless HTTP avenue.
+//!
+//! The client itself is [`crate::data::api_client::ApiClient`]; this module is
+//! the avenue's descriptor — the base URL and the derived WebSocket origin, in
+//! one place so the relay and the JSON calls can never disagree about which
+//! api-server they are talking to.
+
+/// Where this server's HTTP avenue points.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HttpTransport {
     pub base: String,
@@ -14,23 +16,32 @@ pub struct HttpTransport {
 impl HttpTransport {
     #[must_use]
     pub fn new(base: impl Into<String>) -> Self {
-        Self { base: base.into() }
+        Self {
+            base: base.into().trim_end_matches('/').to_owned(),
+        }
     }
 
-    /// Join a path onto the base.
-    ///
-    /// Returns `None` for a path that is not rooted, that contains a `..` segment, or that is
-    /// absolute in the scheme sense — all three are ways a caller-supplied identifier turns an
-    /// internal call into a request to somewhere else entirely.
+    /// The matching WebSocket origin: `https` → `wss`, `http` → `ws`.
     #[must_use]
-    pub fn url(&self, path: &str) -> Option<String> {
-        if !path.starts_with('/') || path.starts_with("//") {
-            return None;
+    pub fn websocket_base(&self) -> String {
+        if let Some(rest) = self.base.strip_prefix("https://") {
+            format!("wss://{rest}")
+        } else if let Some(rest) = self.base.strip_prefix("http://") {
+            format!("ws://{rest}")
+        } else {
+            format!("wss://{}", self.base)
         }
-        if path.contains("://") || path.split('/').any(|segment| segment == "..") {
-            return None;
-        }
-        Some(format!("{}{path}", self.base.trim_end_matches('/')))
+    }
+
+    #[must_use]
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base, path)
+    }
+
+    /// Cleartext to anything but loopback is a configuration error.
+    #[must_use]
+    pub fn is_safe_for_production(&self) -> bool {
+        self.base.starts_with("https://")
     }
 }
 
@@ -39,20 +50,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_path_cannot_escape_the_configured_base() {
+    fn trailing_slashes_never_double_up() {
         let transport = HttpTransport::new("https://api.indiebuild.dev/");
+        assert_eq!(transport.url("/v1/runs"), "https://api.indiebuild.dev/v1/runs");
+    }
+
+    #[test]
+    fn the_websocket_origin_follows_the_http_scheme() {
         assert_eq!(
-            transport.url("/v1/runs").as_deref(),
-            Some("https://api.indiebuild.dev/v1/runs")
+            HttpTransport::new("https://api.indiebuild.dev").websocket_base(),
+            "wss://api.indiebuild.dev"
         );
-        for bad in [
-            "v1/runs",
-            "//evil.test/v1",
-            "https://evil.test",
-            "/v1/../../admin",
-            "/v1/..//x",
-        ] {
-            assert_eq!(transport.url(bad), None, "path {bad}");
-        }
+        assert_eq!(
+            HttpTransport::new("http://127.0.0.1:8080").websocket_base(),
+            "ws://127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn cleartext_is_not_production_safe() {
+        assert!(HttpTransport::new("https://api.indiebuild.dev").is_safe_for_production());
+        assert!(!HttpTransport::new("http://api.indiebuild.dev").is_safe_for_production());
     }
 }

@@ -1,61 +1,67 @@
 #![forbid(unsafe_code)]
-//! Liveness and readiness.
+
+//! The health payload.
 //!
-//! `/healthz` answers as long as the process is running: it is the probe Cloud Run restarts on,
-//! and a probe that fails because a *dependency* is unwell turns one sick dependency into a
-//! restart loop. `/readyz` is the one that reports dependencies, so a load balancer can stop
-//! sending traffic without anything being killed.
-//!
-//! Both are plain text, both are outside the host-routing gate — a probe reaches this service
-//! through the container's own address, with no `Host` header of ours — and neither says anything
-//! a stranger could use.
+//! `/healthz` is served by [`crate::hosts::common`] on every product surface and
+//! is deliberately **not** mounted on the unknown-host surface. The body is
+//! generated here so the shape has one definition and one test.
 
-use axum::extract::State;
-use axum::http::{header, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
+use serde::Serialize;
 
-use crate::state::{now_seconds, AppState};
-
-/// `GET /healthz`.
-pub async fn healthz(State(state): State<AppState>) -> Response {
-    let uptime = now_seconds().saturating_sub(state.started_at);
-    text(
-        StatusCode::OK,
-        format!("ok\nservice=gha-indie-worker-web-server\nuptime={uptime}s\n"),
-    )
+/// What `/healthz` answers. Nothing here depends on a database, an upstream, or
+/// a credential: liveness must not fail because a dependency is having a day.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Health {
+    pub status: &'static str,
+    pub service: &'static str,
+    pub namespace: &'static str,
 }
 
-/// `GET /readyz`.
-///
-/// Reports which dependencies are configured. It is deliberately not a health *check* — this tier
-/// does not open a database connection to answer a probe, because a probe that does work is a
-/// denial-of-service amplifier.
-pub async fn readyz(State(state): State<AppState>) -> Response {
-    let warnings = state.config.warnings();
-    let assets = crate::assets::assets().warnings();
-    let degraded = !warnings.is_empty() || !assets.is_empty();
-    let mut body = String::from(if degraded { "degraded\n" } else { "ready\n" });
-    for warning in warnings.iter().chain(assets.iter()) {
-        body.push_str("- ");
-        body.push_str(warning);
-        body.push('\n');
+impl Default for Health {
+    fn default() -> Self {
+        Self {
+            status: "ok",
+            service: crate::SERVICE_NAME,
+            namespace: crate::SERVICE_NAMESPACE,
+        }
     }
-    // Degraded is still serving: the development stub answers requests, and a readiness probe that
-    // fails closed on a missing optional dependency takes the site down to report a warning.
-    text(StatusCode::OK, body)
 }
 
-fn text(status: StatusCode, body: String) -> Response {
-    let mut response = (status, body).into_response();
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    response
+/// The health payload as JSON.
+#[must_use]
+pub fn json() -> String {
+    serde_json::to_string(&Health::default()).unwrap_or_else(|_| r#"{"status":"ok"}"#.to_owned())
+}
+
+/// A human-readable one-liner, kept for the original module contract.
+#[must_use]
+pub fn markup() -> String {
+    format!("<p>{} health ok</p>", crate::SERVICE_NAME)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_payload_names_the_service_and_namespace() {
+        let value: serde_json::Value = serde_json::from_str(&json()).expect("valid json");
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["service"], crate::SERVICE_NAME);
+        assert_eq!(value["namespace"], "gha-indie-worker");
+    }
+
+    #[test]
+    fn the_payload_carries_nothing_sensitive() {
+        let text = json();
+        assert!(!text.contains("postgres"));
+        assert!(!text.contains("secret"));
+        assert!(!text.contains("token"));
+    }
+
+    #[test]
+    fn the_markup_form_is_still_available() {
+        assert!(markup().contains("health ok"));
+    }
 }

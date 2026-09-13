@@ -1,0 +1,10 @@
+Vendored third-party browser assets live here.
+
+They are fetched by `scripts/vendor-assets.sh` and are deliberately NOT
+committed: the file this directory exists for is htmx, and pinning it in git
+would mean two places to update. `.gitignore` excludes `htmx.min.js`; the
+Dockerfile and CI both run the script before the asset is needed.
+
+    scripts/vendor-assets.sh
+    # curl -fsSL https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js \
+    #   -o assets/vendor/htmx.min.js

@@ -34,7 +34,24 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharin
     && cp "target/release/gha-indie-worker-web-server" "/usr/local/bin/gha-indie-worker-web-server"
 
 ############################
-# Stage 2 — slim runtime + sops
+# Stage 2 — browser assets
+############################
+# Browser assets are vendored in their own stage so a Rust-only change does not
+# refetch them, and a network hiccup here cannot invalidate the build cache.
+# vendor-assets.sh verifies the committed SHA-384 pin before anything is served.
+FROM debian:bookworm-slim AS assets
+WORKDIR /assets-src
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl openssl \
+    && apt-get clean \
+    && find /var/lib/apt/lists -mindepth 1 -delete
+COPY scripts/vendor-assets.sh /usr/local/bin/vendor-assets.sh
+COPY assets ./assets
+RUN chmod 0755 /usr/local/bin/vendor-assets.sh \
+    && ASSETS_DIR=/assets-src/assets /usr/local/bin/vendor-assets.sh
+
+############################
+# Stage 3 — slim runtime + sops
 ############################
 FROM debian:bookworm-slim AS runtime
 ARG SOPS_ENV=prod
@@ -44,6 +61,7 @@ RUN apt-get update \
     && find /var/lib/apt/lists -mindepth 1 -delete \
     && useradd --system --uid 65532 --no-create-home --shell /usr/sbin/nologin app
 COPY --from=build "/usr/local/bin/gha-indie-worker-web-server" "/usr/local/bin/gha-indie-worker-web-server"
+COPY --from=assets /assets-src/assets /app/assets
 COPY --from=ghcr.io/getsops/sops:v3.10.2-alpine --chmod=0755 /usr/local/bin/sops /usr/local/bin/sops
 COPY --chmod=0755 scripts/sops-entrypoint.sh /usr/local/bin/sops-entrypoint.sh
 # Ciphertext is optional. Bind-mount the repo so a missing env/enc does not
@@ -58,8 +76,9 @@ ENV SOPS_SECRETS_FILE=/app/secrets/app.env \
     OTEL_SERVICE_NAME=gha-indie-worker-web-server \
     OTEL_EXPORTER_OTLP_ENDPOINT=http://dd-otel-collector.observability.svc.cluster.local:4318 \
     RUST_LOG=info \
+    GHA_INDIE_WORKER_ASSETS_DIR=/app/assets \
     GHA_INDIE_WORKER_WEB_BIND=0.0.0.0:8080
-# Assets are embedded in the binary, so there is nothing to mount and no filesystem to traverse.
+WORKDIR /app
 USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/sops-entrypoint.sh", "/usr/local/bin/gha-indie-worker-web-server"]

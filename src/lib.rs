@@ -1,63 +1,64 @@
 #![forbid(unsafe_code)]
-//! `gha-indie-worker-web-server` — one binary, five host-routed surfaces.
-//!
-//! | host | surface | what it is |
-//! |---|---|---|
-//! | `www.` / apex | marketing | two equal doors: for your team, for yourself |
-//! | `user.` | B2C | individual sign-up, magic-link sign-in, personal settings |
-//! | `org.` | B2B | organization sign-in, seats, invitations, members, domains |
-//! | `app.` | application | runs, run detail with a live log tail, runners, settings |
-//! | `m.` | mobile | the same application, small-screen chrome, no live island |
-//!
-//! `admin.` and `admin-api.` resolve to surfaces this binary answers **404** for. That decision is
-//! `lib_core::runtime::surface::dispose`'s, made once, and honoured in exactly two places:
-//! [`pages::show`] and [`pages::accept_post`].
-//!
-//! ## How the crate is arranged
-//!
-//! Modules split along one line: **pure** modules import nothing outside `std` and are compiled
-//! and tested standalone with `rustc --edition 2021 --test`; **bound** modules are the ones that
-//! touch axum, the clock, the network or randomness.
-//!
-//! | pure | what it decides |
-//! |---|---|
-//! | [`csrf`] | the CSRF check, cookie parsing, form decoding, constant-time comparison |
-//! | [`present`] | which page a request means, and what every refusal says to a human |
-//! | [`policy`] | the CSP and every other security header |
-//! | [`wire`] | the WebSocket JSON codec |
-//! | [`sri`] | SHA-384 and base64, for subresource integrity |
-//!
-//! [`bridge`] is the seam: it converts lib-core's enums into the mirrors the pure modules speak,
-//! with a total `match` in every direction, so a new variant upstream is a compile error here
-//! rather than a missing message in a browser.
-//!
-//! Start-up is resolved through [`flags`] (flags-2-env) and checked by
-//! [`server::startup_plan`] before anything binds; [`web_api_plane`] names the four web ↔ API
-//! avenues against the shared k8s data-plane definitions.
 
-pub mod assets;
+//! `gha-indie-worker-web-server` — the MASH surface for **indiebuild.dev**.
+//!
+//! MASH = **M**aud + **A**xum + **S**upabase/SeaORM + **H**TMX. There is no
+//! React, no JSX, no bundler and no third-party inline script: every page is
+//! rendered server-side into [`maud::Markup`] and progressively enhanced by one
+//! self-hosted copy of htmx at `/assets/vendor/htmx.min.js`.
+//!
+//! One process serves four public hosts and routes on the `Host` header
+//! (Cloudflare is the only trusted proxy):
+//!
+//! | host | [`Surface`] | audience |
+//! |---|---|---|
+//! | `app.indiebuild.dev` | [`Surface::App`] | marketing-continuous home + product dashboard |
+//! | `user.indiebuild.dev` | [`Surface::User`] | B2C signup/login, personal workspace |
+//! | `org.indiebuild.dev` | [`Surface::Org`] | B2B org login, onboarding wizard, org admin |
+//! | `m.indiebuild.dev` | [`Surface::Mobile`] | compact layouts, bottom navigation |
+//!
+//! Anything else resolves to [`Surface::Unknown`] and is answered with a 404
+//! page — an unrecognised `Host` never falls through to a product surface.
+//!
+//! Four interaction avenues, exactly as the fleet contract requires:
+//!
+//! 1. read-only SeaORM against `DATABASE_URL_CANONICAL` ([`data::db`], feature `db`);
+//! 2. stateless HTTP to the api-server for every write ([`data::api_client`]);
+//! 3. stateful TCP ([`transport::tcp`]) plus WebSocket relay on the HTTP port ([`ws`]);
+//! 4. async NATS/JetStream subjects ([`transport::nats`]).
+//!
+//! [`web_api_plane`] binds those avenues to the shared `k8s-web-api-data-plane`
+//! definitions. Start-up is resolved by [`flags`] (flags-2-env, fail-closed) and
+//! checked by [`server::startup_plan`] before anything binds.
+
 pub mod auth;
-pub mod bridge;
+pub mod chat;
 pub mod config;
 pub mod csrf;
+pub mod data;
 pub mod error;
 pub mod flags;
+pub mod hosts;
+pub mod middleware;
 pub mod pages;
 pub mod persistence;
-pub mod policy;
-pub mod present;
+pub mod rate_limit;
+pub mod releases;
 pub mod server;
-pub mod sri;
+pub mod session;
 pub mod state;
+pub mod telemetry;
 pub mod transport;
+pub mod ui;
 pub mod web_api_plane;
-pub mod wire;
 pub mod ws;
 
+pub use config::WebConfig;
 pub use error::WebError;
-pub use server::run;
+pub use hosts::Surface;
 pub use state::AppState;
 
-/// The service name reported to `ores-middleware` and `ores-otel`. It must match
-/// `ORES_OTEL_SERVICE_NAME` in `gcp/cloudrun/services.tf`.
-pub const SERVICE: &str = "gha-indie-worker-web-server";
+/// Service name reported to ores-middleware, ores-otel and Cloud Run.
+pub const SERVICE_NAME: &str = "gha-indie-worker-web-server";
+/// Telemetry namespace shared by every server in the org.
+pub const SERVICE_NAMESPACE: &str = "gha-indie-worker";

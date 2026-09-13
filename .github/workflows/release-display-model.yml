@@ -1,0 +1,34 @@
+name: release-display-model
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-display-model-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-display-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.95.0
+          components: rustfmt
+      - name: Compile and execute the real dependency-free display module
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 --deny warnings --test src/releases/status.rs -o "$RUNNER_TEMP/release-display-tests"
+          "$RUNNER_TEMP/release-display-tests"
+      - name: Check display-module formatting
+        run: rustfmt --edition 2021 --config-path rustfmt.toml --check src/releases/status.rs
+      # This focused check does NOT replace ci/rust or ci/acceptance and does
+      # not establish HTTP integration, production auth, or release readiness.

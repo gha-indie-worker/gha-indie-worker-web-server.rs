@@ -13,3 +13,5 @@ env/dec
 !env/enc/*.env.enc
 !scripts/sops-entrypoint.sh
 # END ores-sops dotenv policy
+assets/releases/
+assets/vendor/htmx.min.js

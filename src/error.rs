@@ -1,20 +1,12 @@
 #![forbid(unsafe_code)]
-//! The one error type every handler returns, and the only place a status code is chosen.
-//!
-//! Refusals are deliberately coarse to the client and precise to the log. `Unauthenticated` and
-//! `Forbidden` both render the same page on a surface a stranger can reach, because "this exists
-//! but you may not see it" is itself an answer.
-//!
-//! The two configuration variants are raised at boot by [`crate::server::startup_plan`] and
-//! [`crate::flags::resolve`], before anything binds; they only reach a response if a handler
-//! re-validates configuration, and then they are an internal error to the visitor.
 
-use axum::http::{header, HeaderValue, StatusCode};
+//! One typed error for every HTML surface. Rendering is deliberately terse: a
+//! visitor sees a title and a short sentence, never an upstream message, a query
+//! string, a token, or a database error.
+
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use maud::html;
 use thiserror::Error;
-
-use crate::csrf::CsrfError;
 
 #[derive(Debug, Error)]
 pub enum WebError {
@@ -22,22 +14,26 @@ pub enum WebError {
     Unauthenticated,
     #[error("forbidden")]
     Forbidden,
+    #[error("step-up authentication required")]
+    StepUpRequired,
+    #[error("csrf token missing or invalid")]
+    CsrfRejected,
     #[error("not found")]
     NotFound,
-    #[error("csrf: {0:?}")]
-    Csrf(CsrfError),
-    /// A form that could not be parsed at all — not a validation failure, which is rendered next
-    /// to the field instead.
-    #[error("bad request: {0}")]
+    #[error("bad request")]
     BadRequest(&'static str),
-    #[error("a dependency is unavailable: {0}")]
-    Unavailable(&'static str),
+    #[error("upstream unavailable")]
+    Unavailable,
+    #[error("rate limited")]
+    RateLimited,
     #[error("internal error")]
     Internal,
-    /// A configuration key is present but unusable. Carries the key name, never the value.
+    /// A configuration key is present but unusable. Carries the key name, never
+    /// the value. Raised at boot by `server::startup_plan`, before anything binds.
     #[error("invalid configuration: {0}")]
     InvalidConfiguration(&'static str),
-    /// flags-2-env could not resolve argv and the environment into a typed configuration.
+    /// flags-2-env could not resolve argv and the environment into a typed
+    /// configuration (`flags::resolve`).
     #[error("configuration resolution failed: {0}")]
     ConfigurationResolution(String),
 }
@@ -46,77 +42,117 @@ impl WebError {
     #[must_use]
     pub const fn status(&self) -> StatusCode {
         match self {
-            // An unauthenticated browser is redirected before it reaches a handler; reaching one
-            // means an API-shaped request, so it gets a status rather than a login page.
-            WebError::Unauthenticated => StatusCode::UNAUTHORIZED,
-            WebError::Forbidden | WebError::Csrf(_) => StatusCode::FORBIDDEN,
-            WebError::NotFound => StatusCode::NOT_FOUND,
-            WebError::BadRequest(_) => StatusCode::BAD_REQUEST,
-            WebError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-            WebError::Internal
-            | WebError::InvalidConfiguration(_)
-            | WebError::ConfigurationResolution(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-
-    /// What the person reads. Never the `Display` form: that one is for the log.
-    #[must_use]
-    pub const fn public_message(&self) -> &'static str {
-        match self {
-            WebError::Unauthenticated => "Sign in to see this.",
-            WebError::Forbidden => "Your account does not have access to this.",
-            WebError::NotFound => "There is nothing at this address.",
-            WebError::Csrf(error) => error.public_message(),
-            WebError::BadRequest(_) => "That request could not be read.",
-            WebError::Unavailable(_) => "Something this page needs is temporarily unavailable.",
-            WebError::Internal
-            | WebError::InvalidConfiguration(_)
-            | WebError::ConfigurationResolution(_) => {
-                "Something went wrong on our side. It has been recorded."
+            Self::Unauthenticated => StatusCode::UNAUTHORIZED,
+            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::StepUpRequired => StatusCode::FORBIDDEN,
+            Self::CsrfRejected => StatusCode::FORBIDDEN,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::Internal | Self::InvalidConfiguration(_) | Self::ConfigurationResolution(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
             }
         }
     }
-}
 
-impl From<CsrfError> for WebError {
-    fn from(error: CsrfError) -> Self {
-        WebError::Csrf(error)
+    /// Stable machine code, safe to put in markup and logs.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Unauthenticated => "unauthenticated",
+            Self::Forbidden => "forbidden",
+            Self::StepUpRequired => "step_up_required",
+            Self::CsrfRejected => "csrf_rejected",
+            Self::NotFound => "not_found",
+            Self::BadRequest(_) => "bad_request",
+            Self::Unavailable => "upstream_unavailable",
+            Self::RateLimited => "rate_limited",
+            Self::Internal => "internal_error",
+            Self::InvalidConfiguration(_) => "invalid_configuration",
+            Self::ConfigurationResolution(_) => "configuration_resolution_failed",
+        }
+    }
+
+    #[must_use]
+    pub const fn headline(&self) -> &'static str {
+        match self {
+            Self::Unauthenticated => "Sign in to continue",
+            Self::Forbidden => "You do not have access to this",
+            Self::StepUpRequired => "Confirm it is you",
+            Self::CsrfRejected => "That form expired",
+            Self::NotFound => "Nothing here",
+            Self::BadRequest(_) => "That request was not understood",
+            Self::Unavailable => "Temporarily unavailable",
+            Self::RateLimited => "Too many requests",
+            Self::Internal | Self::InvalidConfiguration(_) | Self::ConfigurationResolution(_) => {
+                "Something went wrong"
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn detail(&self) -> &'static str {
+        match self {
+            Self::Unauthenticated => "This page needs a signed-in account.",
+            Self::Forbidden => "Your role does not include this page. Ask an organization owner for access.",
+            Self::StepUpRequired => "This action needs a second factor. Confirm with your authenticator or passkey.",
+            Self::CsrfRejected => "Reload the page and try again — the security token no longer matched.",
+            Self::NotFound => "The page you asked for does not exist on this host.",
+            // `&&'static str` from the match ergonomics; the target is the inner one.
+            Self::BadRequest(reason) => *reason,
+            Self::Unavailable => "A service this page depends on did not answer. Nothing was changed.",
+            Self::RateLimited => "Slow down for a moment and try again.",
+            // Configuration failures are for the log; a visitor never sees a key name.
+            Self::Internal | Self::InvalidConfiguration(_) | Self::ConfigurationResolution(_) => {
+                "The request failed before it finished. Nothing was changed."
+            }
+        }
     }
 }
 
 impl IntoResponse for WebError {
     fn into_response(self) -> Response {
-        let status = self.status();
-        if status.is_server_error() {
-            tracing::error!(error = %self, "request failed");
-        } else {
-            tracing::debug!(error = %self, "request refused");
+        // The chrome-less body keeps this usable both as a full page and as an
+        // htmx swap target; hosts::*::error_page wraps it in the shell.
+        let body = crate::ui::components::error_block(&self);
+        (self.status(), body).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statuses_and_codes_are_distinct_and_stable() {
+        assert_eq!(WebError::NotFound.status(), StatusCode::NOT_FOUND);
+        assert_eq!(WebError::CsrfRejected.status(), StatusCode::FORBIDDEN);
+        assert_eq!(WebError::CsrfRejected.code(), "csrf_rejected");
+        assert_eq!(WebError::RateLimited.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn details_never_leak_an_upstream_message() {
+        for error in [
+            WebError::Unavailable,
+            WebError::Internal,
+            WebError::InvalidConfiguration("GHA_INDIE_WORKER_API_HTTP_BASE"),
+            WebError::ConfigurationResolution("unknown option --x".into()),
+            WebError::Forbidden,
+            WebError::Unauthenticated,
+        ] {
+            assert!(!error.detail().is_empty());
+            assert!(!error.detail().contains("http"));
         }
-        let body = html! {
-            (maud::DOCTYPE)
-            html lang="en" {
-                head {
-                    meta charset="utf-8";
-                    meta name="viewport" content="width=device-width, initial-scale=1";
-                    meta name="color-scheme" content="light dark";
-                    title { (status.as_u16()) " · GHA Indie Worker" }
-                    link rel="stylesheet" href="/assets/app.css";
-                }
-                body class="plain" {
-                    main class="stack narrow" {
-                        p class="eyebrow" { (status.as_u16()) }
-                        h1 { (status.canonical_reason().unwrap_or("Error")) }
-                        p { (self.public_message()) }
-                        p { a class="button" href="/" { "Back to the start" } }
-                    }
-                }
-            }
-        };
-        let mut response = (status, body).into_response();
-        // An error page is never a cache entry.
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        response
+    }
+
+    #[test]
+    fn configuration_failures_are_internal_and_never_name_the_key_to_a_visitor() {
+        let error = WebError::InvalidConfiguration("GHA_INDIE_WORKER_DATABASE_URL");
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code(), "invalid_configuration");
+        assert!(!error.detail().contains("DATABASE"));
+        assert!(error.to_string().contains("GHA_INDIE_WORKER_DATABASE_URL"), "the log keeps the key");
     }
 }
