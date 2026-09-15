@@ -2,12 +2,7 @@
 
 use crate::config::WebConfig;
 use crate::pages;
-use axum::{
-    http::StatusCode,
-    response::Html,
-    routing::get,
-    Router,
-};
+use axum::{http::StatusCode, response::Html, routing::get, Router};
 use std::error::Error;
 
 pub fn router() -> Router {
@@ -19,7 +14,10 @@ pub fn router() -> Router {
 
 pub async fn run(config: &WebConfig) -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
-    eprintln!("gha-indie-worker-web-server listening on {}", listener.local_addr()?);
+    eprintln!(
+        "gha-indie-worker-web-server listening on {}",
+        listener.local_addr()?
+    );
     axum::serve(listener, router()).await?;
     Ok(())
 }
