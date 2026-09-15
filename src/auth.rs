@@ -16,8 +16,14 @@ mod tests {
 
     #[test]
     fn accepts_only_nonempty_canonical_bearer_values() {
-        assert_eq!(require_bearer(Some("Bearer token")).expect("token"), "token");
-        assert!(matches!(require_bearer(None), Err(WebError::Unauthenticated)));
+        assert_eq!(
+            require_bearer(Some("Bearer token")).expect("token"),
+            "token"
+        );
+        assert!(matches!(
+            require_bearer(None),
+            Err(WebError::Unauthenticated)
+        ));
         assert!(matches!(
             require_bearer(Some("Bearer ")),
             Err(WebError::Unauthenticated)
