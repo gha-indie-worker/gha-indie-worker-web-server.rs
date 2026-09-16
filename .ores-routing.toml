@@ -1,0 +1,25 @@
+version = 1
+surface = "web"
+
+[filesystem]
+mode = "authoritative"
+root = "src/pages"
+leaf = "page.rs"
+static_before_dynamic = true
+fail_on_conflict = true
+dynamic_segment = "[param]"
+catch_all_segment = "[...param]"
+optional_catch_all_segment = "[[...param]]"
+
+[rpc]
+api_docs = "ORESoftware/api-docs"
+role = "client_only"
+route_map_authoritative = false
+typed_page_calls = true
+
+[prerender]
+enabled = true
+deterministic = true
+sort_and_dedupe = true
+require_versioned_remote_inputs = true
+manifest = "generated/prerender-routes.json"
