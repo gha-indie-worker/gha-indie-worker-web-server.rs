@@ -1,4 +1,9 @@
 # flags-2-env surface for `ghaiw-web`
+#
+# Credential-capable database connection material is intentionally not a public
+# flag because argv is observable through process listings and shell history.
+# GHA_INDIE_WORKER_DATABASE_URL stays environment/secret-store only until
+# flags-2-env supports env-only generated declarations (flags-2-env#29).
 [flags.config]
 env = "GHA_INDIE_WORKER_CONFIG"
 aliases = ["config"]
@@ -22,12 +27,6 @@ env = "GHA_INDIE_WORKER_API_HTTP_BASE"
 aliases = ["gha-indie-worker-api-http-base"]
 type = "string"
 help = "Runtime environment key GHA_INDIE_WORKER_API_HTTP_BASE."
-
-[flags.gha-indie-worker-database-url]
-env = "GHA_INDIE_WORKER_DATABASE_URL"
-aliases = ["gha-indie-worker-database-url"]
-type = "string"
-help = "Runtime environment key GHA_INDIE_WORKER_DATABASE_URL."
 
 [flags.gha-indie-worker-web-bind]
 env = "GHA_INDIE_WORKER_WEB_BIND"
