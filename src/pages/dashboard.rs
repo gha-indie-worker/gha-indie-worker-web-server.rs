@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn shell_exposes_operational_navigation_and_error_owner() {
-        let html = markup("pipelines");
+        let pipelines = markup("pipelines");
         for label in [
             "Applications",
             "Pipelines",
@@ -188,11 +188,14 @@ mod tests {
             "Ecosystem",
             "Audit",
         ] {
-            assert!(html.contains(label));
+            assert!(pipelines.contains(label));
         }
-        assert!(html.contains("ORESoftware/ores-err-trace"));
-        assert!(html.contains("aria-current=\"page\""));
-        assert!(!html.contains("React"));
+        assert!(pipelines.contains("aria-current=\"page\""));
+        assert!(!pipelines.contains("React"));
+
+        let errors = markup("errors");
+        assert!(errors.contains("ORESoftware/ores-err-trace"));
+        assert!(errors.contains("public.error_tracking"));
     }
 
     #[test]
