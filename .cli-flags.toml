@@ -1,35 +1,36 @@
 # flags-2-env surface for `ghaiw-web`
 [flags.config]
 env = "GHA_INDIE_WORKER_CONFIG"
-long = "config"
+aliases = ["config"]
+type = "string"
 help = "Path to TOML configuration"
 
 [flags.api_base]
 env = "GHA_INDIE_WORKER_API_BASE"
-long = "api-base"
+aliases = ["api-base"]
+type = "string"
 help = "API HTTP base URL"
 
 [flags.json]
 env = "GHA_INDIE_WORKER_JSON"
-long = "json"
-switch = true
+aliases = ["json"]
+type = "bool"
 help = "Emit JSON"
-
 
 [flags.gha-indie-worker-api-http-base]
 env = "GHA_INDIE_WORKER_API_HTTP_BASE"
-long = "gha-indie-worker-api-http-base"
+aliases = ["gha-indie-worker-api-http-base"]
 type = "string"
 help = "Runtime environment key GHA_INDIE_WORKER_API_HTTP_BASE."
 
 [flags.gha-indie-worker-database-url]
 env = "GHA_INDIE_WORKER_DATABASE_URL"
-long = "gha-indie-worker-database-url"
+aliases = ["gha-indie-worker-database-url"]
 type = "string"
 help = "Runtime environment key GHA_INDIE_WORKER_DATABASE_URL."
 
 [flags.gha-indie-worker-web-bind]
 env = "GHA_INDIE_WORKER_WEB_BIND"
-long = "gha-indie-worker-web-bind"
+aliases = ["gha-indie-worker-web-bind"]
 type = "string"
 help = "Runtime environment key GHA_INDIE_WORKER_WEB_BIND."
