@@ -16,22 +16,63 @@ jobs:
   smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    env:
+      ORES_CLI_READ_TOKEN: ${{ secrets.ORES_CLI_READ_TOKEN }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with: { ref: '${{ env.EXPECTED_HEAD }}', persist-credentials: false }
-      - name: Build pinned tools and execute authored contracts
+
+      - name: Build public pinned tools and execute public authored contracts
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"; test -f .zpkg.toml; test -f .cli-flags.toml
-          git clone --filter=blob:none https://github.com/zed-pkg/zed-cli.git "$RUNNER_TEMP/zed-cli"; git -C "$RUNNER_TEMP/zed-cli" checkout --detach "$ZED_CLI_REV"; (cd "$RUNNER_TEMP/zed-cli" && cargo build --locked --release --bin zed)
-          git clone --filter=blob:none https://github.com/flags-2-env/flags-2-env.git "$RUNNER_TEMP/flags2env"; git -C "$RUNNER_TEMP/flags2env" checkout --detach "$FLAGS2ENV_REV"; make -C "$RUNNER_TEMP/flags2env" all
-          git clone --filter=blob:none https://github.com/ORESoftware/ores-cli.git "$RUNNER_TEMP/ores-cli"; git -C "$RUNNER_TEMP/ores-cli" checkout --detach "$ORES_CLI_REV"; (cd "$RUNNER_TEMP/ores-cli" && cargo build --locked --release --bin oresc --bin ores-cli)
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -f .zpkg.toml
+          test -f .cli-flags.toml
+
+          git clone --filter=blob:none https://github.com/zed-pkg/zed-cli.git "$RUNNER_TEMP/zed-cli"
+          git -C "$RUNNER_TEMP/zed-cli" checkout --detach "$ZED_CLI_REV"
+          (cd "$RUNNER_TEMP/zed-cli" && cargo build --locked --release --bin zed)
+
+          git clone --filter=blob:none https://github.com/flags-2-env/flags-2-env.git "$RUNNER_TEMP/flags2env"
+          git -C "$RUNNER_TEMP/flags2env" checkout --detach "$FLAGS2ENV_REV"
+          make -C "$RUNNER_TEMP/flags2env" all
+
           "$RUNNER_TEMP/zed-cli/target/release/zed" validate --manifest .zpkg.toml
           "$RUNNER_TEMP/flags2env/build/flags2env" audit .cli-flags.toml
+          ! (test -f .shared-auth.toml && test -f .auth-shared.toml)
+          ! grep -R --line-number --fixed-strings 'github.com/ORESoftware/flags-2-env' Cargo.toml Cargo.lock .zpkg.toml 2>/dev/null
+          git diff --exit-code HEAD
+
+      - name: Record private ores-cli authorization boundary
+        if: env.ORES_CLI_READ_TOKEN == ''
+        shell: bash
+        run: |
+          echo '::notice::ORES_CLI_READ_TOKEN is absent; public Zed/flags2env/runtime contract checks executed, but private ores-cli baseline/source admission is not certified by this run.'
+          {
+            echo '### Private ores-cli admission'
+            echo 'Not certified: `ORES_CLI_READ_TOKEN` was not available to this workflow run.'
+            echo 'Public Zed and flags2env checks still executed stepfully.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build pinned private ores-cli when authorized
+        if: env.ORES_CLI_READ_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="$ORES_CLI_READ_TOKEN"
+          gh auth setup-git >/dev/null
+          CARGO_NET_GIT_FETCH_WITH_CLI=true git clone --filter=blob:none https://github.com/ORESoftware/ores-cli.git "$RUNNER_TEMP/ores-cli"
+          git -C "$RUNNER_TEMP/ores-cli" checkout --detach "$ORES_CLI_REV"
+          test "$(git -C "$RUNNER_TEMP/ores-cli" rev-parse HEAD)" = "$ORES_CLI_REV"
+          (cd "$RUNNER_TEMP/ores-cli" && CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build --locked --release --bin oresc --bin ores-cli)
+
+      - name: Execute private ores-cli admission when authorized
+        if: env.ORES_CLI_READ_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
           "$RUNNER_TEMP/ores-cli/target/release/oresc" --no-json audit repo --path . --profile baseline
           "$RUNNER_TEMP/ores-cli/target/release/ores-cli" --no-json audit repo --path . --profile baseline
           "$RUNNER_TEMP/ores-cli/target/release/oresc" --no-json audit repo --path . --profile source
-          ! (test -f .shared-auth.toml && test -f .auth-shared.toml)
-          ! grep -R --line-number --fixed-strings 'github.com/ORESoftware/flags-2-env' Cargo.toml Cargo.lock .zpkg.toml 2>/dev/null
           git diff --exit-code HEAD
