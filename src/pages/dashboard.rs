@@ -37,7 +37,11 @@ pub fn markup(active: &str) -> String {
     let nav = NAV
         .iter()
         .map(|(slug, label)| {
-            let current = if *slug == active { " aria-current=\"page\"" } else { "" };
+            let current = if *slug == active {
+                " aria-current=\"page\""
+            } else {
+                ""
+            };
             format!(
                 "<a class=\"nav-item{}\" href=\"/app/{}\"{}>{}</a>",
                 if *slug == active { " active" } else { "" },
@@ -174,7 +178,16 @@ mod tests {
     #[test]
     fn shell_exposes_operational_navigation_and_error_owner() {
         let html = markup("pipelines");
-        for label in ["Applications", "Pipelines", "Deployments", "Infrastructure", "Runners", "Errors", "Ecosystem", "Audit"] {
+        for label in [
+            "Applications",
+            "Pipelines",
+            "Deployments",
+            "Infrastructure",
+            "Runners",
+            "Errors",
+            "Ecosystem",
+            "Audit",
+        ] {
             assert!(html.contains(label));
         }
         assert!(html.contains("ORESoftware/ores-err-trace"));
