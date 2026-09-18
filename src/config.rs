@@ -5,6 +5,8 @@
 #[path = "../generated/rust/runtime.rs"]
 mod env_runtime;
 
+use crate::env_map::{value, EnvMap};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebConfig {
     pub bind: String,
@@ -22,6 +24,14 @@ impl WebConfig {
             api_http_base: values.gha_indie_worker_api_http_base,
             database_url: values.gha_indie_worker_database_url,
         }
+    }
+
+    /// Read configuration out of an immutable environment snapshot: the
+    /// process environment copied at the boundary, with CLI flag overrides
+    /// overlaid. Nothing here reads or writes the process environment, which
+    /// is the point of `env_map` — see `src/flags.rs`.
+    pub fn from_env_map(env: &EnvMap) -> Self {
+        Self::from_lookup(|key| value(env, key).map(str::to_owned))
     }
 
     pub fn from_env() -> Self {
@@ -72,5 +82,22 @@ mod tests {
         assert_eq!(config.bind, "127.0.0.1:8081");
         assert_eq!(config.api_http_base, None);
         assert_eq!(config.database_url, None);
+    }
+
+    #[test]
+    fn env_map_snapshot_drives_web_config_without_touching_process_env() {
+        let before = std::env::var_os("GHA_INDIE_WORKER_WEB_BIND");
+        let env = EnvMap::from([
+            (
+                "GHA_INDIE_WORKER_WEB_BIND".to_owned(),
+                "  127.0.0.1:19090  ".to_owned(),
+            ),
+            ("GHA_INDIE_WORKER_API_HTTP_BASE".to_owned(), "".to_owned()),
+        ]);
+        let config = WebConfig::from_env_map(&env);
+        assert_eq!(config.bind, "127.0.0.1:19090");
+        assert_eq!(config.api_http_base, None);
+        assert_eq!(config.database_url, None);
+        assert_eq!(std::env::var_os("GHA_INDIE_WORKER_WEB_BIND"), before);
     }
 }
