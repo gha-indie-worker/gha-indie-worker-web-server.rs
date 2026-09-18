@@ -59,6 +59,7 @@ fn non_empty(field: &'static str, value: &str) -> Result<String, WebError> {
 pub fn router() -> Router {
     Router::new()
         .route("/", get(|| async { Html(pages::home::markup()) }))
+        .route("/health", get(|| async { StatusCode::NO_CONTENT }))
         .route("/healthz", get(|| async { StatusCode::NO_CONTENT }))
         .route("/readyz", get(|| async { StatusCode::NO_CONTENT }))
 }
@@ -166,7 +167,7 @@ mod tests {
 
     #[tokio::test]
     async fn health_and_ready_are_empty_success_responses() {
-        for path in ["/healthz", "/readyz"] {
+        for path in ["/health", "/healthz", "/readyz"] {
             let (status, _, body) = request(Method::GET, path).await;
             assert_eq!(status, StatusCode::NO_CONTENT);
             assert!(body.is_empty());
