@@ -30,5 +30,11 @@ tmp/worktrees/
 !/env/enc/prod.env.enc
 # END ores-sops dotenv policy
 
+# Repository-local temporary data and authorized Git worktrees
+tmp
+temp
+tmp/worktrees
+temp/worktrees
+
 # typespec-json-schema-validator comparison evidence (generated; never an authority)
 .typespec-json-schema-validator/
