@@ -4,4 +4,3 @@
 pub struct NatsTransport {
     pub subject: String,
 }
-

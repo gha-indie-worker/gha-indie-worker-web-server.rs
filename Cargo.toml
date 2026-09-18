@@ -1,23 +1,26 @@
-    [package]
-    name = "gha-indie-worker-web-server"
-    version = "0.1.0"
-    edition = "2021"
-    license = "MIT"
-    description = "MASH web server for GHA Indie Worker"
-    repository = "https://github.com/gha-indie-worker/gha-indie-worker-web-server.rs"
+[package]
+name = "gha-indie-worker-web-server"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "MASH web server for GHA Indie Worker"
+repository = "https://github.com/gha-indie-worker/gha-indie-worker-web-server.rs"
 
-    [features]
-    default = ["tcp-transport", "nats-transport"]
-    tcp-transport = []
-    nats-transport = []
+[features]
+default = ["tcp-transport", "nats-transport"]
+tcp-transport = []
+nats-transport = []
 
-    [dependencies]
+[dependencies]
+axum = { version = "0.8.9", features = ["http1", "tokio"] }
 k8s-web-api-data-plane = { git = "https://github.com/ORESoftware/k8s-libs-and-shared-defs.git", rev = "55adadc9f6d223d40b28ae66097dfe16930951b1", package = "k8s-web-api-data-plane" }
-    serde = { version = "1", features = ["derive"] }
-    serde_json = "1"
-    thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]
 unsafe_code = "forbid"
-
-

@@ -6,11 +6,14 @@
 #   docker run --rm --platform linux/arm64 \
 #     -e SOPS_AGE_KEY="$(cat ~/.config/sops/age/keys.txt)" gha-indie-worker-web-server:dev
 #
-# ores-sops (https://github.com/ORESoftware/ores-sops):
-#   env/enc/dev.env.enc and env/enc/prod.env.enc — ciphertext, committed
-#   env/dec/<name>.env — plaintext, gitignored
-# Decrypt at `docker run`, never at `docker build`. Age key via SOPS_AGE_KEY
-# or SOPS_AGE_KEY_FILE. Orchestrator env (including OTEL_*) wins over secrets.
+# ores-sops boundary (https://github.com/ORESoftware/ores-sops):
+# - never copy plaintext OR ciphertext environment material into an image layer;
+#   env/enc/<name>.env.enc is committed to the repository but stays OUT of the
+#   build context (.dockerignore), and env/dec/<name>.env is gitignored;
+# - mount ciphertext read-only at /run/secrets/app.env at runtime;
+# - supply the age key through SOPS_AGE_KEY_FILE (preferred) or SOPS_AGE_KEY;
+# - the entrypoint decrypts only in process memory before exec'ing the server;
+# - orchestrator env (including OTEL_*) wins over decrypted secrets.
 #
 # ores-otel (https://github.com/ores-otel):
 #   The app exports OTLP in-process. Default collector is
@@ -26,6 +29,8 @@ FROM rust:1.90-bookworm AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY . .
+# /src/target is a BuildKit cache mount, so nothing under it survives this RUN:
+# the stripped binary is copied to /usr/local/bin, and that is what stage 2 takes.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,id=cargo-git,sharing=locked \
     --mount=type=cache,target=/src/target,id=gha-indie-worker-web-server-target-${TARGETARCH},sharing=locked \
@@ -37,27 +42,23 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry,sharin
 # Stage 2 — slim runtime + sops
 ############################
 FROM debian:bookworm-slim AS runtime
-ARG SOPS_ENV=prod
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates \
     && apt-get clean \
     && find /var/lib/apt/lists -mindepth 1 -delete \
     && useradd --system --uid 65532 --no-create-home --shell /usr/sbin/nologin app
+
 COPY --from=build "/usr/local/bin/gha-indie-worker-web-server" "/usr/local/bin/gha-indie-worker-web-server"
 COPY --from=ghcr.io/getsops/sops:v3.10.2-alpine --chmod=0755 /usr/local/bin/sops /usr/local/bin/sops
 COPY --chmod=0755 scripts/sops-entrypoint.sh /usr/local/bin/sops-entrypoint.sh
-# Ciphertext is optional. Bind-mount the repo so a missing env/enc does not
-# fail the build; when present it is renamed to .env so sops can infer dotenv.
-RUN --mount=type=bind,source=.,target=/src,ro \
-    mkdir -p /app/secrets \
-    && if [ -f /src/env/enc/${SOPS_ENV}.env.enc ]; then \
-         cp "/src/env/enc/${SOPS_ENV}.env.enc" /app/secrets/app.env; \
-       fi \
-    && chown -R 65532:65532 /app /usr/local/bin/gha-indie-worker-web-server
-ENV SOPS_SECRETS_FILE=/app/secrets/app.env \
+
+ENV GHA_INDIE_WORKER_WEB_BIND=0.0.0.0:8080 \
+    SOPS_SECRETS_FILE=/run/secrets/app.env \
+    HOME=/tmp \
     OTEL_SERVICE_NAME=gha-indie-worker-web-server \
     OTEL_EXPORTER_OTLP_ENDPOINT=http://dd-otel-collector.observability.svc.cluster.local:4318 \
     RUST_LOG=info
-USER 65532:65532
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/sops-entrypoint.sh", "/usr/local/bin/gha-indie-worker-web-server"]
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/sops-entrypoint.sh"]
+CMD ["/usr/local/bin/gha-indie-worker-web-server"]
