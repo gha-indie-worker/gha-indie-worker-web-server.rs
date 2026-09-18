@@ -3,7 +3,6 @@
 export const API_BASE = "GHA_INDIE_WORKER_API_BASE" as const;
 export const CONFIG = "GHA_INDIE_WORKER_CONFIG" as const;
 export const GHA_INDIE_WORKER_API_HTTP_BASE = "GHA_INDIE_WORKER_API_HTTP_BASE" as const;
-export const GHA_INDIE_WORKER_DATABASE_URL = "GHA_INDIE_WORKER_DATABASE_URL" as const;
 export const GHA_INDIE_WORKER_WEB_BIND = "GHA_INDIE_WORKER_WEB_BIND" as const;
 export const JSON = "GHA_INDIE_WORKER_JSON" as const;
 
@@ -11,7 +10,6 @@ export interface CliEnv {
   readonly GHA_INDIE_WORKER_API_BASE?: string;
   readonly GHA_INDIE_WORKER_CONFIG?: string;
   readonly GHA_INDIE_WORKER_API_HTTP_BASE?: string;
-  readonly GHA_INDIE_WORKER_DATABASE_URL?: string;
   readonly GHA_INDIE_WORKER_WEB_BIND?: string;
   readonly GHA_INDIE_WORKER_JSON?: boolean;
 }
@@ -20,7 +18,6 @@ export const EnvKeys = {
   API_BASE: API_BASE,
   CONFIG: CONFIG,
   GHA_INDIE_WORKER_API_HTTP_BASE: GHA_INDIE_WORKER_API_HTTP_BASE,
-  GHA_INDIE_WORKER_DATABASE_URL: GHA_INDIE_WORKER_DATABASE_URL,
   GHA_INDIE_WORKER_WEB_BIND: GHA_INDIE_WORKER_WEB_BIND,
   JSON: JSON,
 } as const;

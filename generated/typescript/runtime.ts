@@ -4,7 +4,6 @@ export interface CliEnvValues {
   readonly api_base?: string;
   readonly config?: string;
   readonly gha_indie_worker_api_http_base?: string;
-  readonly gha_indie_worker_database_url?: string;
   readonly gha_indie_worker_web_bind?: string;
   readonly json?: boolean;
 }
@@ -15,7 +14,6 @@ export function loadFrom(lookup: (key: string) => string | undefined): CliEnvVal
     api_base: nonEmpty(lookup("GHA_INDIE_WORKER_API_BASE")),
     config: nonEmpty(lookup("GHA_INDIE_WORKER_CONFIG")),
     gha_indie_worker_api_http_base: nonEmpty(lookup("GHA_INDIE_WORKER_API_HTTP_BASE")),
-    gha_indie_worker_database_url: nonEmpty(lookup("GHA_INDIE_WORKER_DATABASE_URL")),
     gha_indie_worker_web_bind: nonEmpty(lookup("GHA_INDIE_WORKER_WEB_BIND")),
     json: (() => { const raw = lookup("GHA_INDIE_WORKER_JSON"); return raw === undefined ? undefined : parseBool(raw, false); })(),
   };
@@ -195,8 +193,6 @@ export function loadEnvMap(
   if (config !== undefined) out["GHA_INDIE_WORKER_CONFIG"] = config;
   const gha_indie_worker_api_http_base = pick(["GHA_INDIE_WORKER_API_HTTP_BASE"], ["flags", "env_shell", "env_file"], shell, dotenv, flags, undefined);
   if (gha_indie_worker_api_http_base !== undefined) out["GHA_INDIE_WORKER_API_HTTP_BASE"] = gha_indie_worker_api_http_base;
-  const gha_indie_worker_database_url = pick(["GHA_INDIE_WORKER_DATABASE_URL"], ["flags", "env_shell", "env_file"], shell, dotenv, flags, undefined);
-  if (gha_indie_worker_database_url !== undefined) out["GHA_INDIE_WORKER_DATABASE_URL"] = gha_indie_worker_database_url;
   const gha_indie_worker_web_bind = pick(["GHA_INDIE_WORKER_WEB_BIND"], ["flags", "env_shell", "env_file"], shell, dotenv, flags, undefined);
   if (gha_indie_worker_web_bind !== undefined) out["GHA_INDIE_WORKER_WEB_BIND"] = gha_indie_worker_web_bind;
   const json = pick(["GHA_INDIE_WORKER_JSON"], ["flags", "env_shell", "env_file"], shell, dotenv, flags, undefined);

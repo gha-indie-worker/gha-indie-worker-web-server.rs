@@ -3,12 +3,11 @@
 import 'dart:io';
 
 final class CliEnvValues {
-  const CliEnvValues({required this.apiBase, required this.config, required this.ghaIndieWorkerApiHttpBase, required this.ghaIndieWorkerDatabaseUrl, required this.ghaIndieWorkerWebBind, required this.json});
+  const CliEnvValues({required this.apiBase, required this.config, required this.ghaIndieWorkerApiHttpBase, required this.ghaIndieWorkerWebBind, required this.json});
 
   final String? apiBase;
   final String? config;
   final String? ghaIndieWorkerApiHttpBase;
-  final String? ghaIndieWorkerDatabaseUrl;
   final String? ghaIndieWorkerWebBind;
   final bool? json;
 }
@@ -19,7 +18,6 @@ CliEnvValues loadFrom(String? Function(String key) lookup) {
     apiBase: _nonEmpty(lookup('GHA_INDIE_WORKER_API_BASE')),
     config: _nonEmpty(lookup('GHA_INDIE_WORKER_CONFIG')),
     ghaIndieWorkerApiHttpBase: _nonEmpty(lookup('GHA_INDIE_WORKER_API_HTTP_BASE')),
-    ghaIndieWorkerDatabaseUrl: _nonEmpty(lookup('GHA_INDIE_WORKER_DATABASE_URL')),
     ghaIndieWorkerWebBind: _nonEmpty(lookup('GHA_INDIE_WORKER_WEB_BIND')),
     json: () { final raw = lookup('GHA_INDIE_WORKER_JSON'); return raw == null ? null : _parseBool(raw, false); }(),
   );
@@ -176,8 +174,6 @@ Map<String, String> loadEnvMap(
   if (config != null) out['GHA_INDIE_WORKER_CONFIG'] = config;
   final ghaIndieWorkerApiHttpBase = pick(['GHA_INDIE_WORKER_API_HTTP_BASE'], ['flags', 'env_shell', 'env_file'], shell, dotenv, flags, null);
   if (ghaIndieWorkerApiHttpBase != null) out['GHA_INDIE_WORKER_API_HTTP_BASE'] = ghaIndieWorkerApiHttpBase;
-  final ghaIndieWorkerDatabaseUrl = pick(['GHA_INDIE_WORKER_DATABASE_URL'], ['flags', 'env_shell', 'env_file'], shell, dotenv, flags, null);
-  if (ghaIndieWorkerDatabaseUrl != null) out['GHA_INDIE_WORKER_DATABASE_URL'] = ghaIndieWorkerDatabaseUrl;
   final ghaIndieWorkerWebBind = pick(['GHA_INDIE_WORKER_WEB_BIND'], ['flags', 'env_shell', 'env_file'], shell, dotenv, flags, null);
   if (ghaIndieWorkerWebBind != null) out['GHA_INDIE_WORKER_WEB_BIND'] = ghaIndieWorkerWebBind;
   final json = pick(['GHA_INDIE_WORKER_JSON'], ['flags', 'env_shell', 'env_file'], shell, dotenv, flags, null);

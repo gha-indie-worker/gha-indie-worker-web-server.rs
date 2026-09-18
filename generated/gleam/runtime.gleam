@@ -7,7 +7,6 @@ pub type CliEnvValues {
     api_base: Option(String),
     config: Option(String),
     gha_indie_worker_api_http_base: Option(String),
-    gha_indie_worker_database_url: Option(String),
     gha_indie_worker_web_bind: Option(String),
     json: Option(String),
   )
@@ -19,7 +18,6 @@ pub fn load_from(lookup: fn(String) -> Option(String)) -> CliEnvValues {
     api_base: nonempty(lookup("GHA_INDIE_WORKER_API_BASE")),
     config: nonempty(lookup("GHA_INDIE_WORKER_CONFIG")),
     gha_indie_worker_api_http_base: nonempty(lookup("GHA_INDIE_WORKER_API_HTTP_BASE")),
-    gha_indie_worker_database_url: nonempty(lookup("GHA_INDIE_WORKER_DATABASE_URL")),
     gha_indie_worker_web_bind: nonempty(lookup("GHA_INDIE_WORKER_WEB_BIND")),
     json: nonempty(lookup("GHA_INDIE_WORKER_JSON")),
   )
