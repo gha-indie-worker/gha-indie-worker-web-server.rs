@@ -1,4 +1,17 @@
-name = "gha-indie-worker-web-server.rs"
-kind = "web-server"
+[package]
+org = "gha-indie-worker"
+name = "gha-indie-worker-web-server"
 version = "0.1.0"
+description = "MASH web server for GHA Indie Worker"
+license = "MIT"
 
+[package.repository]
+vcs = "git"
+url = "https://github.com/gha-indie-worker/gha-indie-worker-web-server.rs"
+
+[targets.rust]
+dir = "."
+adapter = "rust"
+
+[install]
+adapter = "none"
