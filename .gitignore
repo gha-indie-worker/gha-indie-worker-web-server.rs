@@ -8,9 +8,13 @@
 .env.*
 !.env.example
 *.sqlite
-Cargo.lock
 
-
+# DEN-3956: ignore agent scratch worktrees and temp dirs (fleet policy)
+tmp/
+temp/
+.tmp/
+tmp/worktrees/
+**/tmp/worktrees/
 
 # BEGIN ores-sops dotenv policy
 *.env
@@ -24,3 +28,12 @@ Cargo.lock
 !/env/enc/dev.env.enc
 !/env/enc/prod.env.enc
 # END ores-sops dotenv policy
+
+# Repository-local temporary data and authorized Git worktrees
+tmp
+temp
+tmp/worktrees
+temp/worktrees
+
+# typespec-json-schema-validator comparison evidence (generated; never an authority)
+.typespec-json-schema-validator/
