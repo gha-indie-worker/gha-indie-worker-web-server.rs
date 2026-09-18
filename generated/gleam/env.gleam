@@ -6,8 +6,6 @@ pub const config = "GHA_INDIE_WORKER_CONFIG"
 
 pub const gha_indie_worker_api_http_base = "GHA_INDIE_WORKER_API_HTTP_BASE"
 
-pub const gha_indie_worker_database_url = "GHA_INDIE_WORKER_DATABASE_URL"
-
 pub const gha_indie_worker_web_bind = "GHA_INDIE_WORKER_WEB_BIND"
 
 pub const json = "GHA_INDIE_WORKER_JSON"
@@ -17,7 +15,6 @@ pub type CliEnv {
     api_base: String,
     config: String,
     gha_indie_worker_api_http_base: String,
-    gha_indie_worker_database_url: String,
     gha_indie_worker_web_bind: String,
     json: Bool,
   )

@@ -1,4 +1,13 @@
 # flags-2-env surface for `ghaiw-web`
+#
+# Credential-capable database connection material is intentionally not a public
+# flag because argv is observable through process listings and shell history.
+# GHA_INDIE_WORKER_DATABASE_URL stays environment/secret-store only until
+# flags-2-env supports env-only generated declarations (flags-2-env#29).
+#
+# One declaration per env key: flags-2-env's config audit fails closed when two
+# declarations name the same `env`, so each key carries every spelling it
+# answers to in `aliases`.
 [help]
 url = "https://github.com/gha-indie-worker/gha-indie-worker-web-server.rs"
 
@@ -7,44 +16,31 @@ allow_unknown = false
 
 [flags.config]
 env = "GHA_INDIE_WORKER_CONFIG"
-long = "config"
+aliases = ["config"]
+type = "string"
 help = "Path to TOML configuration"
 
 [flags.api_base]
 env = "GHA_INDIE_WORKER_API_BASE"
-long = "api-base"
+aliases = ["api-base"]
+type = "string"
 help = "API HTTP base URL"
 
 [flags.json]
 env = "GHA_INDIE_WORKER_JSON"
-long = "json"
-switch = true
+aliases = ["json"]
+type = "bool"
 help = "Emit JSON"
-
-# One declaration per env key: flags-2-env's own config audit fails closed when
-# two declarations name the same `env`, so the short spelling authored on
-# agent/env-map-no-set-var and the long generated spelling are carried on a
-# single block each — `long` keeps the generated name that
-# generated/*/runtime.* and src/config.rs are built from, `aliases` keeps the
-# short command-line spelling.
-[flags.gha-indie-worker-web-bind]
-env = "GHA_INDIE_WORKER_WEB_BIND"
-long = "gha-indie-worker-web-bind"
-aliases = ["bind"]
-type = "string"
-default = "127.0.0.1:8081"
-help = "HTTP bind address."
 
 [flags.gha-indie-worker-api-http-base]
 env = "GHA_INDIE_WORKER_API_HTTP_BASE"
-long = "gha-indie-worker-api-http-base"
-aliases = ["api-http-base"]
+aliases = ["gha-indie-worker-api-http-base", "api-http-base"]
 type = "string"
 help = "API HTTP base URL."
 
-[flags.gha-indie-worker-database-url]
-env = "GHA_INDIE_WORKER_DATABASE_URL"
-long = "gha-indie-worker-database-url"
-aliases = ["database-url"]
+[flags.gha-indie-worker-web-bind]
+env = "GHA_INDIE_WORKER_WEB_BIND"
+aliases = ["gha-indie-worker-web-bind", "bind"]
 type = "string"
-help = "Optional database URL for direct reads."
+default = "127.0.0.1:8081"
+help = "HTTP bind address."

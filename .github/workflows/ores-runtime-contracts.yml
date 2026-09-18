@@ -1,17 +1,35 @@
 name: ORES runtime contracts
+
 on:
   pull_request:
-    paths: ['.zpkg.toml', '.zpkg.lock', '.cli-flags.toml', '.ores-*.toml', '.shared-auth.toml', '.auth-shared.toml', 'Cargo.toml', 'Cargo.lock', '.github/workflows/ores-runtime-contracts.yml']
+    paths:
+      - '.zpkg.toml'
+      - '.zpkg.lock'
+      - '.cli-flags.toml'
+      - '.ores-*.toml'
+      - '.shared-auth.toml'
+      - '.auth-shared.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/ores-runtime-contracts.yml'
+  push:
+    branches:
+      - 'feat/DEN-3945-runnable-compose-web-20260915'
   workflow_dispatch:
-permissions: { contents: read }
+
+permissions:
+  contents: read
+
 concurrency:
   group: ores-runtime-contracts-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
 env:
   EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
   ZED_CLI_REV: a1c5b7a3c72b957944b76911fcbc723dd9c16541
   FLAGS2ENV_REV: 333c2ace93c362d274171ab0e0edf613d96a8e59
   ORES_CLI_REV: 19063469d3bf399415d520386e4e9423c4c5fde6
+
 jobs:
   smoke:
     runs-on: ubuntu-24.04
@@ -19,10 +37,13 @@ jobs:
     env:
       ORES_CLI_READ_TOKEN: ${{ secrets.ORES_CLI_READ_TOKEN }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with: { ref: '${{ env.EXPECTED_HEAD }}', persist-credentials: false }
+      - name: Check out exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
 
-      - name: Build public pinned tools and execute public authored contracts
+      - name: Build public pinned tools and execute authored contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -32,14 +53,20 @@ jobs:
 
           git clone --filter=blob:none https://github.com/zed-pkg/zed-cli.git "$RUNNER_TEMP/zed-cli"
           git -C "$RUNNER_TEMP/zed-cli" checkout --detach "$ZED_CLI_REV"
+          test "$(git -C "$RUNNER_TEMP/zed-cli" rev-parse HEAD)" = "$ZED_CLI_REV"
           (cd "$RUNNER_TEMP/zed-cli" && cargo build --locked --release --bin zed)
 
           git clone --filter=blob:none https://github.com/flags-2-env/flags-2-env.git "$RUNNER_TEMP/flags2env"
           git -C "$RUNNER_TEMP/flags2env" checkout --detach "$FLAGS2ENV_REV"
+          test "$(git -C "$RUNNER_TEMP/flags2env" rev-parse HEAD)" = "$FLAGS2ENV_REV"
           make -C "$RUNNER_TEMP/flags2env" all
 
           "$RUNNER_TEMP/zed-cli/target/release/zed" validate --manifest .zpkg.toml
           "$RUNNER_TEMP/flags2env/build/flags2env" audit .cli-flags.toml
+          grep -Fq 'url = "https://github.com/gha-indie-worker/gha-indie-worker-web-server.rs"' .zpkg.toml
+          grep -Fq '"gha-indie-worker/gha-indie-worker-lib-core" = "^0.1.0"' .zpkg.toml
+          grep -Fq '"gha-indie-worker/gha-indie-worker-orm-core" = "^0.1.0"' .zpkg.toml
+          ! grep -Eq '^[[:space:]]*kind[[:space:]]*=' .zpkg.toml
           ! (test -f .shared-auth.toml && test -f .auth-shared.toml)
           ! grep -R --line-number --fixed-strings 'github.com/ORESoftware/flags-2-env' Cargo.toml Cargo.lock .zpkg.toml 2>/dev/null
           git diff --exit-code HEAD

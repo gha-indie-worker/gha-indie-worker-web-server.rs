@@ -12,7 +12,7 @@
 
 use std::io::Write;
 
-use crate::env_map::EnvMap;
+use crate::env_map::{merge_env, EnvMap};
 use flags2env::BundledFlags2Env;
 use tempfile::NamedTempFile;
 
@@ -26,6 +26,12 @@ pub fn resolve_from(
     argv: &[String],
     environment: impl IntoIterator<Item = (String, String)>,
 ) -> Result<EnvMap, String> {
+    // Snapshot the environment once; it is both an input to flags-2-env and the
+    // base the resolved values are overlaid onto, so env keys that are NOT
+    // declared in .cli-flags.toml still reach the application. That is what
+    // carries secret-only material such as GHA_INDIE_WORKER_DATABASE_URL,
+    // which is deliberately not a public flag (see .cli-flags.toml).
+    let environment: EnvMap = environment.into_iter().collect();
     let mut contract = NamedTempFile::new()
         .map_err(|error| format!("cannot create embedded flags-2-env contract: {error}"))?;
     contract
@@ -69,17 +75,20 @@ pub fn resolve_from(
     // Precedence, lowest to highest: contract dotenv, process environment,
     // dotenv overrides, flags actually given on the command line.
     let mut raw = parsed.dotenv;
-    raw.extend(environment);
+    raw.extend(environment.clone());
     raw.extend(parsed.dotenv_overrides);
     raw.extend(parsed.provided_flags);
     let typed = parser
         .coerce::<serde_json::Map<String, serde_json::Value>, _>(&raw, Some(path))
         .map_err(|error| format!("flags-2-env typed configuration failed: {error}"))?;
-    typed
+    let declared: EnvMap = typed
         .into_iter()
         .filter(|(_, value)| !value.is_null())
         .map(|(name, value)| scalar_string(&name, value).map(|value| (name, value)))
-        .collect()
+        .collect::<Result<EnvMap, String>>()?;
+    // Declared/typed values (CLI overrides, contract defaults) win over the
+    // raw environment snapshot; undeclared environment keys survive.
+    Ok(merge_env(environment, declared))
 }
 
 fn scalar_string(name: &str, value: serde_json::Value) -> Result<String, String> {
@@ -133,6 +142,25 @@ mod tests {
         )
         .is_err());
         assert_eq!(std::env::var_os("ENV_MAP_PROBE"), before);
+    }
+
+    #[test]
+    fn undeclared_secret_environment_keys_survive_resolution() {
+        // GHA_INDIE_WORKER_DATABASE_URL is deliberately not a public flag, so it
+        // is absent from .cli-flags.toml and from the generated runtime. It must
+        // still reach the application through the environment snapshot.
+        let env = resolve_from(
+            &["svc".to_owned()],
+            [(
+                "GHA_INDIE_WORKER_DATABASE_URL".to_owned(),
+                "postgres://synthetic.invalid/db".to_owned(),
+            )],
+        )
+        .expect("valid flags");
+        assert_eq!(
+            value(&env, "GHA_INDIE_WORKER_DATABASE_URL"),
+            Some("postgres://synthetic.invalid/db")
+        );
     }
 
     #[test]
