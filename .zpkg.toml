@@ -1,7 +1,6 @@
 [package]
 org = "gha-indie-worker"
 name = "gha-indie-worker-web-server"
-kind = "server"
 version = "0.1.0"
 description = "MASH web server for GHA Indie Worker"
 license = "MIT"
