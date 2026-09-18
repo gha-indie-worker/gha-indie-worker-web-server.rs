@@ -1,30 +1,57 @@
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
-use std::path::Path;
+//! Fail-closed argv and environment resolution through flags-2-env.
+//!
+//! The `.cli-flags.toml` contract is embedded at compile time and materialized
+//! to a temporary file for the duration of one resolve, so a deployed binary
+//! does not depend on its working directory containing the contract (the
+//! runtime container image ships only the binary, sops and the entrypoint).
+//!
+//! Nothing in this module writes the process environment: the resolved values
+//! are returned as an `EnvMap` snapshot. See `src/env_map.rs`.
 
-use crate::env_map::{merge_env, EnvMap};
+use std::io::Write;
+
+use crate::env_map::EnvMap;
 use flags2env::BundledFlags2Env;
+use tempfile::NamedTempFile;
 
-pub fn parse_cli_flags(
+const CONTRACT: &str = include_str!("../.cli-flags.toml");
+
+pub fn resolve() -> Result<EnvMap, String> {
+    resolve_from(&std::env::args().collect::<Vec<_>>(), std::env::vars())
+}
+
+pub fn resolve_from(
     argv: &[String],
-    config_path: &Path,
-) -> Result<HashMap<String, String>, String> {
-    let config_path = config_path
+    environment: impl IntoIterator<Item = (String, String)>,
+) -> Result<EnvMap, String> {
+    let mut contract = NamedTempFile::new()
+        .map_err(|error| format!("cannot create embedded flags-2-env contract: {error}"))?;
+    contract
+        .write_all(CONTRACT.as_bytes())
+        .map_err(|error| format!("cannot materialize embedded flags-2-env contract: {error}"))?;
+    let path = contract
+        .path()
         .to_str()
-        .ok_or_else(|| ".cli-flags.toml path is not valid UTF-8".to_string())?;
+        .ok_or_else(|| "flags-2-env contract path is not valid UTF-8".to_owned())?;
     let parser = BundledFlags2Env::new();
     parser
-        .audit_config(Some(config_path))
-        .map_err(|error| format!("flags-2-env configuration audit failed: {error}"))?;
+        .audit_config(Some(path))
+        .map_err(|error| format!("flags-2-env contract audit failed: {error}"))?;
     let parsed = parser
-        .parse_structured(argv, Some(config_path))
-        .map_err(|error| format!("flags-2-env parse failed: {error}"))?;
+        .parse_structured(argv, Some(path))
+        .map_err(|error| format!("flags-2-env parsing failed: {error}"))?;
+
+    // Errors name the option but never echo the value that failed.
     if !parsed.unknown_options.is_empty() {
-        return Err(format!(
-            "unknown command-line option(s): {}",
-            parsed.unknown_options.join(", ")
-        ));
+        let names = parsed
+            .unknown_options
+            .iter()
+            .map(|option| option.split('=').next().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!("unknown command-line option(s): {names}"));
     }
     if !parsed.errors.is_empty() {
         return Err(format!(
@@ -32,23 +59,38 @@ pub fn parse_cli_flags(
             parsed.errors.join("; ")
         ));
     }
-    Ok(parsed.flags)
+    if !parsed.extras.is_empty() {
+        return Err(format!(
+            "unexpected positional argument(s): {}",
+            parsed.extras.len()
+        ));
+    }
+
+    // Precedence, lowest to highest: contract dotenv, process environment,
+    // dotenv overrides, flags actually given on the command line.
+    let mut raw = parsed.dotenv;
+    raw.extend(environment);
+    raw.extend(parsed.dotenv_overrides);
+    raw.extend(parsed.provided_flags);
+    let typed = parser
+        .coerce::<serde_json::Map<String, serde_json::Value>, _>(&raw, Some(path))
+        .map_err(|error| format!("flags-2-env typed configuration failed: {error}"))?;
+    typed
+        .into_iter()
+        .filter(|(_, value)| !value.is_null())
+        .map(|(name, value)| scalar_string(&name, value).map(|value| (name, value)))
+        .collect()
 }
 
-pub fn apply_cli_flags() -> Result<EnvMap, String> {
-    apply_cli_flags_from(
-        std::env::args().collect(),
-        std::env::vars().collect(),
-        Path::new(".cli-flags.toml"),
-    )
-}
-
-pub fn apply_cli_flags_from(
-    argv: Vec<String>,
-    initial: EnvMap,
-    config_path: &Path,
-) -> Result<EnvMap, String> {
-    Ok(merge_env(initial, parse_cli_flags(&argv, config_path)?))
+fn scalar_string(name: &str, value: serde_json::Value) -> Result<String, String> {
+    match value {
+        serde_json::Value::String(value) => Ok(value),
+        serde_json::Value::Bool(value) => Ok(value.to_string()),
+        serde_json::Value::Number(value) => Ok(value.to_string()),
+        _ => Err(format!(
+            "flags-2-env returned a non-scalar value for {name}"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -56,31 +98,38 @@ mod tests {
     use super::*;
     use crate::env_map::value;
 
-    fn config_path() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(".cli-flags.toml")
+    #[test]
+    fn unknown_options_fail_closed_without_echoing_values() {
+        let error = resolve_from(
+            &[
+                "server".to_owned(),
+                "--definitely-unknown=do-not-echo".to_owned(),
+            ],
+            std::iter::empty(),
+        )
+        .expect_err("unknown option");
+        assert!(error.contains("--definitely-unknown"));
+        assert!(!error.contains("do-not-echo"));
     }
 
     #[test]
     fn cli_overrides_merge_into_map_without_mutating_process_env() {
-        let before = std::env::var_os("ENV_MAP_PROBE");
-        let env = apply_cli_flags_from(
-            vec!["svc".into()],
-            EnvMap::from([("ENV_MAP_PROBE".into(), "before".into())]),
-            &config_path(),
+        let before = std::env::var_os("GHA_INDIE_WORKER_WEB_BIND");
+        let env = resolve_from(
+            &["svc".to_owned(), "--bind".to_owned(), "127.0.0.1:19001".to_owned()],
+            std::iter::empty(),
         )
         .expect("valid flags");
-        assert_eq!(value(&env, "ENV_MAP_PROBE"), Some("before"));
-        assert_eq!(std::env::var_os("ENV_MAP_PROBE"), before);
+        assert_eq!(value(&env, "GHA_INDIE_WORKER_WEB_BIND"), Some("127.0.0.1:19001"));
+        assert_eq!(std::env::var_os("GHA_INDIE_WORKER_WEB_BIND"), before);
     }
 
     #[test]
     fn parse_failure_does_not_mutate_process_environment() {
         let before = std::env::var_os("ENV_MAP_PROBE");
-        let initial = EnvMap::from([("ENV_MAP_PROBE".into(), "keep".into())]);
-        assert!(apply_cli_flags_from(
-            vec!["svc".into(), "--this-flag-is-not-declared".into()],
-            initial,
-            &config_path(),
+        assert!(resolve_from(
+            &["svc".to_owned(), "--this-flag-is-not-declared".to_owned()],
+            [("ENV_MAP_PROBE".to_owned(), "keep".to_owned())],
         )
         .is_err());
         assert_eq!(std::env::var_os("ENV_MAP_PROBE"), before);

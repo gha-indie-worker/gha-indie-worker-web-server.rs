@@ -1,17 +1,11 @@
 #![forbid(unsafe_code)]
 
-use gha_indie_worker_web_server::{config::WebConfig, flags, server};
+use gha_indie_worker_web_server::{config::WebConfig, error::WebError, flags, server};
 use std::error::Error;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let env = match flags::apply_cli_flags() {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("{error}");
-            std::process::exit(2);
-        }
-    };
-    let cfg = WebConfig::from_env_map(&env);
+    let environment = flags::resolve().map_err(WebError::ConfigurationResolution)?;
+    let cfg = WebConfig::from_env_map(&environment);
     server::run(&cfg).await
 }
