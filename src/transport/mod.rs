@@ -29,4 +29,3 @@ pub fn choose(operation: Operation) -> Avenue {
         Operation::AsyncStatus => Avenue::DurableNats,
     }
 }
-

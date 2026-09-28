@@ -6,4 +6,3 @@ use crate::config::WebConfig;
 pub struct AppState {
     pub config: WebConfig,
 }
-

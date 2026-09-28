@@ -8,5 +8,8 @@ pub enum WebError {
     Unauthenticated,
     #[error("unavailable")]
     Unavailable,
+    #[error("invalid configuration: {0}")]
+    InvalidConfiguration(&'static str),
+    #[error("configuration resolution failed: {0}")]
+    ConfigurationResolution(String),
 }
-
