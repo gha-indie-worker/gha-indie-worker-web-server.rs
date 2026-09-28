@@ -8,5 +8,8 @@ pub enum WebError {
     Unauthenticated,
     #[error("unavailable")]
     Unavailable,
+    #[error("invalid configuration: {0}")]
+    InvalidConfiguration(&'static str),
+    #[error("I/O failure: {0}")]
+    Io(#[from] std::io::Error),
 }
-
