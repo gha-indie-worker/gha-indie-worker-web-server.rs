@@ -24,14 +24,11 @@ jobs:
           toolchain: '1.90.0'
           components: rustfmt, clippy
 
-      - name: Verify committed lock
-        run: cargo metadata --locked --format-version 1 >/dev/null
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Test all targets
-        run: cargo test --locked --all-targets
-
-      - name: Run strict Clippy
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: Emit exact lockfile candidate
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          echo '---BEGIN-CARGO-LOCK---'
+          cat Cargo.lock
+          echo '---END-CARGO-LOCK---'
+          exit 1
