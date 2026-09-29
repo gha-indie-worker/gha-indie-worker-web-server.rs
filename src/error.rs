@@ -8,5 +8,6 @@ pub enum WebError {
     Unauthenticated,
     #[error("unavailable")]
     Unavailable,
+    #[error("http listener failed: {0}")]
+    Io(#[from] std::io::Error),
 }
-
