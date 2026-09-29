@@ -17,11 +17,7 @@ fn response_for_path(path: &str) -> (&'static str, &'static str, String) {
     }
 
     if path == "/" {
-        return (
-            "200 OK",
-            "text/html; charset=utf-8",
-            pages::home::markup(),
-        );
+        return ("200 OK", "text/html; charset=utf-8", pages::home::markup());
     }
 
     return (
