@@ -47,8 +47,9 @@ pub fn run(config: &WebConfig) -> io::Result<()> {
     let listener = TcpListener::bind(config.bind.trim())?;
 
     println!("web bind {}", config.bind);
-    if let Some(base) = config.api_http_base.as_deref() {
-        println!("web api base {base}");
+    if config.api_http_base.is_some() {
+        // The configured URL can contain credentials or signed query data.
+        println!("web api base configured");
     }
 
     let active = Arc::new(AtomicUsize::new(0));
@@ -76,7 +77,9 @@ fn dispatch_connection(mut stream: TcpStream, active: &Arc<AtomicUsize>) {
             eprintln!("web client thread admission failed: {error}");
         }
     } else {
-        let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+        // Keep the accept loop responsive even if an overloaded peer does not
+        // drain the tiny 503 response.
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(20)));
         let _ = write_response(
             &mut stream,
             "503 Service Unavailable",
@@ -152,16 +155,25 @@ fn read_crlf_line(reader: &mut impl BufRead, limit: usize) -> Result<String, Int
 
 fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeError> {
     let request_line = read_crlf_line(reader, MAX_REQUEST_LINE_BYTES)?;
-    let mut parts = request_line
-        .trim_end_matches("\r\n")
-        .split_ascii_whitespace();
+    // Strict origin-form grammar: exactly two SP separators. Treating tabs
+    // and repeated whitespace as separators creates parser disagreements with
+    // intermediate HTTP components (request-smuggling ambiguity).
+    let line = request_line
+        .strip_suffix("\r\n")
+        .ok_or(IntakeError::Malformed)?;
+    let mut parts = line.split(' ');
     let method = parts.next().ok_or(IntakeError::Malformed)?;
     let target = parts.next().ok_or(IntakeError::Malformed)?;
     let version = parts.next().ok_or(IntakeError::Malformed)?;
-    if parts.next().is_some()
+    if method.is_empty()
+        || target.is_empty()
+        || parts.next().is_some()
         || !matches!(version, "HTTP/1.0" | "HTTP/1.1")
         || !target.starts_with('/')
         || !method.bytes().all(|b| b.is_ascii_alphabetic())
+        // Raw Unicode, fragments, and ASCII controls must be encoded before
+        // being placed in an HTTP/1.x request target.
+        || !target.bytes().all(|b| b.is_ascii_graphic() && b != b'#')
     {
         return Err(IntakeError::Malformed);
     }
@@ -188,7 +200,13 @@ fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeEr
             return Err(IntakeError::Malformed);
         }
         if name.eq_ignore_ascii_case("host") {
-            if host_seen || value.trim().is_empty() {
+            let host = value.trim();
+            if host_seen
+                || host.is_empty()
+                || host.bytes().any(|b| {
+                    !b.is_ascii_graphic() || matches!(b, b',' | b'@' | b'/' | b'\\' | b'#')
+                })
+            {
                 return Err(IntakeError::Malformed);
             }
             host_seen = true;
@@ -211,18 +229,55 @@ fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeEr
     if version == "HTTP/1.1" && !host_seen {
         return Err(IntakeError::Malformed);
     }
-    if target.bytes().any(|b| b == 0 || b == 0x7f || b < 0x20) {
-        return Err(IntakeError::Malformed);
-    }
-
     Ok((
         method.to_owned(),
         target.split('?').next().unwrap_or_default().to_owned(),
     ))
 }
 
-fn write_response(
+// Writing small health responses still needs an absolute budget: a peer that
+// reads a byte at a time must not hold a client thread forever by repeatedly
+// resetting the socket's per-write timeout.
+struct DeadlineWrite<'a> {
+    stream: &'a mut TcpStream,
+    until: Instant,
+}
+
+impl Write for DeadlineWrite<'_> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        let remaining = self
+            .until
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "response deadline expired"))?;
+        self.stream.set_write_timeout(Some(remaining))?;
+        self.stream.write(data)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if Instant::now() >= self.until {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "response deadline expired"));
+        }
+        self.stream.flush()
+    }
+}
+
+fn write_response_bounded(
     stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &str,
+    head_only: bool,
+) -> io::Result<()> {
+    let mut writer = DeadlineWrite {
+        stream,
+        until: Instant::now() + WRITE_TIMEOUT,
+    };
+    write_response(&mut writer, status, content_type, body, head_only)
+}
+
+fn write_response(
+    stream: &mut impl Write,
     status: &str,
     content_type: &str,
     body: &str,
@@ -250,7 +305,7 @@ fn serve(mut stream: TcpStream) -> io::Result<()> {
         Ok(request) => request,
         Err(error) => {
             let (status, body) = error.response();
-            return write_response(&mut stream, status, "application/json", body, false);
+            return write_response_bounded(&mut stream, status, "application/json", body, false);
         }
     };
 
@@ -277,7 +332,7 @@ fn serve(mut stream: TcpStream) -> io::Result<()> {
             r#"{"error":"method_not_allowed"}"#.to_owned(),
         ),
     };
-    write_response(&mut stream, status, content_type, &body, method == "HEAD")
+    write_response_bounded(&mut stream, status, content_type, &body, method == "HEAD")
 }
 
 #[cfg(test)]
