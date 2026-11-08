@@ -1,0 +1,161 @@
+name: web HTTP admission (bounded raw sockets)
+
+on:
+  pull_request:
+    paths:
+      - src/server.rs
+      - src/server_adversarial_tests.rs
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/web-http-admission.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-http-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "EXACT_HEAD=$EXPECTED_HEAD"
+          echo "EXACT_TREE=$(git rev-parse HEAD^{tree})"
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.90.0"
+          components: rustfmt, clippy
+      - name: Enforce Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Compile and lint all targets
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Execute focused adversarial HTTP matrix
+        run: cargo test --locked --lib server::server_adversarial_tests -- --nocapture
+      - name: Execute every Rust test target
+        run: cargo test --locked --all-targets
+      - name: Negative mutation must trigger a guest-test failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          original = '    if version == "HTTP/1.1" && !host_seen {'
+          assert source.count(original) == 1, "expected a single Host admission guard"
+          path.write_text(source.replace(original, '    if false {', 1))
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::rejects_host_ambiguity_and_body_framing_that_is_never_consumed -- --exact > "${RUNNER_TEMP}/http-mutant.log" 2>&1; then
+            echo "Host-negative mutation unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/http-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
+      - name: Negative mutation must reject normalized request-line whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          original = "    let mut parts = line.split(' ');"
+          mutant = "    let mut parts = line.split_ascii_whitespace();"
+          assert source.count(original) == 1, "expected a single strict-space request-line parser"
+          path.write_text(source.replace(original, mutant, 1))
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::request_line_requires_exact_sp_separators_and_encoded_targets -- --exact > "${RUNNER_TEMP}/line-mutant.log" 2>&1; then
+            echo "Whitespace-normalizing parser unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/line-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
+      - name: Negative mutation must reject encoded control bypass
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          original = "        || !valid_request_target(target)"
+          assert source.count(original) == 1, "expected one encoded-target gate"
+          path.write_text(source.replace(original, "        || false", 1))
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::malformed_percent_escapes_and_encoded_separators_are_rejected -- --exact > "${RUNNER_TEMP}/encoded-mutant.log" 2>&1; then
+            echo "Encoded-target bypass unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/encoded-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
+      - name: Negative mutation must reject malformed Host authority bypass
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          original = "if host_seen || !valid_host_authority(value) {"
+          assert source.count(original) == 1, "expected one Host authority gate"
+          path.write_text(source.replace(original, "if host_seen || false {", 1))
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::malformed_host_authorities_fail_closed -- --exact > "${RUNNER_TEMP}/authority-mutant.log" 2>&1; then
+            echo "Host authority bypass unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/authority-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
+      - name: Negative mutation must catch an idle-only timeout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          reader_start = source.index("impl Read for DeadlineRead {")
+          reader_end = source.index("#[derive(Debug", reader_start)
+          reader_impl = source[reader_start:reader_end]
+          original = "self\n            .until\n            .checked_duration_since(Instant::now())"
+          mutant = "(Instant::now() + Duration::from_millis(300))\n            .checked_duration_since(Instant::now())"
+          assert reader_impl.count(original) == 1, "expected exactly one absolute-read-deadline calculation"
+          path.write_text(
+              source[:reader_start] + reader_impl.replace(original, mutant, 1) + source[reader_end:]
+          )
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::slow_drip_cannot_extend_the_total_request_deadline -- --exact > "${RUNNER_TEMP}/drip-mutant.log" 2>&1; then
+            echo "Idle-only timeout mutation unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/drip-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
