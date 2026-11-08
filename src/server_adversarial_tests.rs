@@ -291,3 +291,23 @@ fn short_deadline_rejects_open_partial_socket_without_waiting_for_idle_timeout()
     assert_eq!(parse_request(&mut reader), Err(IntakeError::TimedOut));
     drop(client);
 }
+
+
+#[test]
+fn startup_preserves_mainline_result_error_contract() {
+    let startup: fn(&WebConfig) -> io::Result<()> = run;
+    let config = WebConfig {
+        bind: "not a valid socket address".to_owned(),
+        api_http_base: None,
+        database_url: None,
+    };
+    assert!(startup(&config).is_err(), "bind failure must return Result::Err");
+}
+
+#[test]
+fn missing_route_keeps_mainline_plain_text_404_contract() {
+    let response = raw_exchange(b"GET /unknown HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"), "{response}");
+    assert!(response.contains("content-type: text/plain; charset=utf-8\r\n"));
+    assert!(response.ends_with("\r\n\r\nnot found\n"), "{response}");
+}
