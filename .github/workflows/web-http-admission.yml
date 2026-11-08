@@ -37,5 +37,32 @@ jobs:
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: "1.97.0"
-      - name: Execute bounded HTTP raw-socket tests
-        run: cargo test --locked --lib server::tests -- --nocapture
+      - name: Enforce Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Compile and lint all targets
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Execute focused adversarial HTTP matrix
+        run: cargo test --locked --lib server::server_adversarial_tests -- --nocapture
+      - name: Execute every Rust test target
+        run: cargo test --locked --all-targets
+      - name: Negative mutation must trigger a guest-test failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          original = '    if version == "HTTP/1.1" && !host_seen {'
+          assert source.count(original) == 1, "expected a single Host admission guard"
+          path.write_text(source.replace(original, '    if false {', 1))
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::rejects_host_ambiguity_and_body_framing_that_is_never_consumed -- --exact > "${RUNNER_TEMP}/http-mutant.log" 2>&1; then
+            echo "Host-negative mutation unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/http-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
