@@ -369,12 +369,18 @@ fn write_response(
     stream.flush()
 }
 
-fn serve(mut stream: TcpStream) -> io::Result<()> {
-    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+fn serve(stream: TcpStream) -> io::Result<()> {
+    serve_with_read_timeout(stream, READ_TIMEOUT)
+}
+
+// The production deadline stays fixed at READ_TIMEOUT; the internal override
+// permits deterministic end-to-end timeout tests without waiting three seconds.
+fn serve_with_read_timeout(mut stream: TcpStream, read_timeout: Duration) -> io::Result<()> {
+    stream.set_read_timeout(Some(read_timeout))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let mut reader = BufReader::new(DeadlineRead {
         stream: stream.try_clone()?,
-        until: Instant::now() + READ_TIMEOUT,
+        until: Instant::now() + read_timeout,
     });
     let (method, path) = match parse_request(&mut reader) {
         Ok(request) => request,
