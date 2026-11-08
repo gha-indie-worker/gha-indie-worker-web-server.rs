@@ -140,10 +140,15 @@ jobs:
           from pathlib import Path
           path = Path("src/server.rs")
           source = path.read_text()
-          original = "        self.stream.set_read_timeout(Some(remaining))?;"
-          mutant = "        self.stream.set_read_timeout(Some(Duration::from_millis(300)))?;"
-          assert source.count(original) == 1, "expected one absolute-read-deadline check"
-          path.write_text(source.replace(original, mutant, 1))
+          reader_start = source.index("impl Read for DeadlineRead {")
+          reader_end = source.index("#[derive(Debug", reader_start)
+          reader_impl = source[reader_start:reader_end]
+          original = "self\\n            .until\\n            .checked_duration_since(Instant::now())"
+          mutant = "(Instant::now() + Duration::from_millis(300))\\n            .checked_duration_since(Instant::now())"
+          assert reader_impl.count(original) == 1, "expected exactly one absolute-read-deadline calculation"
+          path.write_text(
+              source[:reader_start] + reader_impl.replace(original, mutant, 1) + source[reader_end:]
+          )
           PY
           trap 'git checkout -- src/server.rs' EXIT
           if cargo test --locked --lib server::server_adversarial_tests::slow_drip_cannot_extend_the_total_request_deadline -- --exact > "${RUNNER_TEMP}/drip-mutant.log" 2>&1; then
