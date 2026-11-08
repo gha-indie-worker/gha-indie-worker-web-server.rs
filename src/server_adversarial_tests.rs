@@ -606,3 +606,150 @@ fn oversize_request_line_responds_414_but_large_headers_respond_431() {
         "{header_response}"
     );
 }
+
+#[test]
+fn open_partial_request_line_returns_408_not_400() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback");
+    let address = listener.local_addr().expect("address");
+    let worker = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        serve_with_read_timeout(stream, Duration::from_millis(125)).expect("408 reply");
+    });
+    let mut client = TcpStream::connect(address).expect("connect");
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("read bound");
+    client.write_all(b"GET /health").expect("partial request");
+    // Deliberately do not shutdown the write side: EOF would mean malformed
+    // request (400); an open slow peer must receive an actual timeout (408).
+    let mut response = String::new();
+    client.read_to_string(&mut response).expect("timeout reply");
+    worker.join().expect("worker");
+    assert!(
+        response.starts_with("HTTP/1.1 408 Request Timeout\r\n"),
+        "{response}"
+    );
+    assert!(response.ends_with("\r\n\r\n{\"error\":\"request_timeout\"}"));
+}
+
+#[test]
+fn open_incomplete_headers_return_408_and_eof_returns_400() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback");
+    let address = listener.local_addr().expect("address");
+    let worker = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        serve_with_read_timeout(stream, Duration::from_millis(125)).expect("408 reply");
+    });
+    let mut client = TcpStream::connect(address).expect("connect");
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("read bound");
+    client
+        .write_all(b"GET /readyz HTTP/1.1\r\nHost: localhost\r\n")
+        .expect("incomplete header terminator");
+    let mut response = String::new();
+    client.read_to_string(&mut response).expect("timeout reply");
+    worker.join().expect("worker");
+    assert!(
+        response.starts_with("HTTP/1.1 408 Request Timeout\r\n"),
+        "{response}"
+    );
+
+    let eof = raw_exchange(b"GET /readyz HTTP/1.1\r\nHost: localhost\r\n");
+    assert!(eof.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{eof}");
+}
+
+#[test]
+fn sustained_overload_does_not_leak_permits_and_recovers_after_capacity_returns() {
+    const REJECTED: usize = 64;
+    let active = Arc::new(AtomicUsize::new(0));
+    let held: Vec<_> = (0..MAX_CONCURRENT_CLIENTS)
+        .map(|_| try_admit(&active).expect("fill admission budget"))
+        .collect();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback");
+    let address = listener.local_addr().expect("address");
+    let server_active = Arc::clone(&active);
+    let (release_tx, release_rx) = mpsc::channel();
+    let acceptor = thread::spawn(move || {
+        for _ in 0..REJECTED {
+            let (stream, _) = listener.accept().expect("accept overload");
+            dispatch_connection(stream, &server_active);
+        }
+        release_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("permit release signal");
+        let (stream, _) = listener.accept().expect("accept recovered request");
+        dispatch_connection(stream, &server_active);
+    });
+    for case in 0..REJECTED {
+        let mut client = TcpStream::connect(address).expect("connect overload");
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("overload read timeout");
+        let mut response = String::new();
+        client.read_to_string(&mut response).expect("read overload reply");
+        assert!(
+            response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+            "overload request {case}: {response}"
+        );
+        assert_eq!(active.load(Ordering::Acquire), MAX_CONCURRENT_CLIENTS);
+    }
+    drop(held);
+    assert_eq!(active.load(Ordering::Acquire), 0);
+    release_tx.send(()).expect("release slots");
+    let mut client = TcpStream::connect(address).expect("connect recovered");
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("recovery read timeout");
+    client
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .expect("recovered request");
+    client
+        .shutdown(Shutdown::Write)
+        .expect("complete recovered request");
+    let mut recovered = String::new();
+    client
+        .read_to_string(&mut recovered)
+        .expect("recovered response");
+    acceptor.join().expect("acceptor");
+    assert!(
+        recovered.starts_with("HTTP/1.1 200 OK\r\n"),
+        "{recovered}"
+    );
+    // The worker may finish just after its socket is closed: wait only for
+    // the local atomic permit to be released, not an arbitrary sleep.
+    let until = Instant::now() + Duration::from_secs(2);
+    while active.load(Ordering::Acquire) != 0 && Instant::now() < until {
+        thread::yield_now();
+    }
+    assert_eq!(active.load(Ordering::Acquire), 0);
+}
+
+#[test]
+fn deterministic_request_mutations_never_panic_or_admit_control_bytes() {
+    let seed = b"GET /readyz HTTP/1.1\r\nHost: localhost\r\nX-Test: ok\r\n\r\n";
+    assert!(parse_bytes(seed).is_ok());
+    let mut state: u32 = 0x8e5f_173b;
+    let mut accepted = 0usize;
+    for sample in 0..4096 {
+        let mut mutated = seed.to_vec();
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let position = (state as usize) % mutated.len();
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let byte = (state >> 24) as u8;
+        match sample % 3 {
+            0 => mutated[position] = byte,
+            1 => mutated.insert(position, byte),
+            _ => {
+                mutated.remove(position);
+            }
+        }
+        if let Ok((method, path)) = parse_bytes(&mutated) {
+            accepted += 1;
+            assert!(method.bytes().all(|b| b.is_ascii_alphabetic()));
+            assert!(path.starts_with('/'));
+            assert!(valid_request_target(&path));
+        }
+    }
+    assert!(accepted > 0, "mutations must exercise the admitted path too");
+}
