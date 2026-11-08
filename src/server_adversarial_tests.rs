@@ -755,3 +755,41 @@ fn deterministic_request_mutations_never_panic_or_admit_control_bytes() {
         "mutations must exercise the admitted path too"
     );
 }
+
+#[test]
+fn slow_drip_cannot_extend_the_total_request_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("loopback");
+    let address = listener.local_addr().expect("address");
+    let worker = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        serve_with_read_timeout(stream, Duration::from_millis(300)).expect("timeout reply");
+    });
+    let mut client = TcpStream::connect(address).expect("connect");
+    client
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .expect("read timeout");
+    client.write_all(b"GET /health").expect("partial request");
+    let mut writer = client.try_clone().expect("clone drip peer");
+    let dripper = thread::spawn(move || {
+        // Each byte arrives well within an idle 300-ms timeout, but the total
+        // request exceeds 300 ms. An idle-only implementation would reach EOF
+        // and reply 400; the absolute deadline must reply 408 first.
+        for _ in 0..12 {
+            thread::sleep(Duration::from_millis(70));
+            if writer.write_all(b"x").is_err() {
+                break;
+            }
+        }
+        let _ = writer.shutdown(Shutdown::Write);
+    });
+    let mut response = String::new();
+    client
+        .read_to_string(&mut response)
+        .expect("absolute-timeout response");
+    dripper.join().expect("join drip peer");
+    worker.join().expect("join server");
+    assert!(
+        response.starts_with("HTTP/1.1 408 Request Timeout\r\n"),
+        "slow drip must not extend admission budget: {response}"
+    );
+}
