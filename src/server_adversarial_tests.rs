@@ -366,3 +366,106 @@ fn missing_route_keeps_mainline_plain_text_404_contract() {
     assert!(response.contains("content-type: text/plain; charset=utf-8\r\n"));
     assert!(response.ends_with("\r\n\r\nnot found\n"), "{response}");
 }
+
+#[test]
+fn request_line_requires_exact_sp_separators_and_encoded_targets() {
+    let invalid: &[(&str, &[u8])] = &[
+        (
+            "duplicate spaces",
+            b"GET  /healthz HTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
+        (
+            "spaces before version",
+            b"GET /healthz  HTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
+        (
+            "tab separators",
+            b"GET\t/healthz\tHTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
+        (
+            "mixed whitespace",
+            b"GET /healthz\tHTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
+        (
+            "leading space",
+            b" GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
+        (
+            "trailing space",
+            b"GET /healthz HTTP/1.1 \r\nHost: x\r\n\r\n",
+        ),
+        (
+            "raw UTF-8 target",
+            b"GET /caf\xc3\xa9 HTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
+        (
+            "fragment in request target",
+            b"GET /healthz#fragment HTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
+    ];
+    for &(case, request) in invalid {
+        assert_eq!(parse_bytes(request), Err(IntakeError::Malformed), "{case}");
+    }
+}
+
+#[test]
+fn encoded_targets_remain_valid_and_literal_fragments_fail_closed() {
+    let positive = b"GET /caf%C3%A9?probe=%23 HTTP/1.1\r\nHost: x\r\n\r\n";
+    assert_eq!(
+        parse_bytes(positive),
+        Ok(("GET".to_owned(), "/caf%C3%A9".to_owned()))
+    );
+    let response = raw_exchange(b"GET /healthz#unexpected HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert!(
+        response.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+        "{response}"
+    );
+}
+
+#[test]
+fn reject_host_authority_delimiters_unicode_and_embedded_whitespace() {
+    let invalid: &[(&str, &[u8])] = &[
+        ("embedded space", b"GET / HTTP/1.1\r\nHost: a b\r\n\r\n"),
+        ("embedded tab", b"GET / HTTP/1.1\r\nHost: a\tb\r\n\r\n"),
+        ("comma list", b"GET / HTTP/1.1\r\nHost: a,b\r\n\r\n"),
+        ("userinfo", b"GET / HTTP/1.1\r\nHost: u@host\r\n\r\n"),
+        ("path delimiter", b"GET / HTTP/1.1\r\nHost: a/b\r\n\r\n"),
+        ("fragment", b"GET / HTTP/1.1\r\nHost: a#b\r\n\r\n"),
+        ("backslash", b"GET / HTTP/1.1\r\nHost: a\\b\r\n\r\n"),
+        ("raw UTF-8", b"GET / HTTP/1.1\r\nHost: caf\xc3\xa9\r\n\r\n"),
+    ];
+    for &(case, request) in invalid {
+        assert_eq!(parse_bytes(request), Err(IntakeError::Malformed), "{case}");
+    }
+}
+
+#[test]
+fn ipv6_literal_and_port_are_still_valid_hosts() {
+    let positive = b"GET /healthz HTTP/1.1\r\nHost: [::1]:8081\r\n\r\n";
+    assert_eq!(
+        parse_bytes(positive),
+        Ok(("GET".to_owned(), "/healthz".to_owned()))
+    );
+    let response = raw_exchange(positive);
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+}
+
+#[test]
+fn expired_response_deadline_prevents_writes_and_flushes() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let client = TcpStream::connect(listener.local_addr().expect("address")).expect("connect");
+    let (mut server, _) = listener.accept().expect("accept");
+    let mut writer = DeadlineWrite {
+        stream: &mut server,
+        until: Instant::now() - Duration::from_millis(1),
+    };
+    assert_eq!(
+        writer.write(b"hello").unwrap_err().kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert_eq!(
+        writer.flush().unwrap_err().kind(),
+        io::ErrorKind::TimedOut
+    );
+    drop(client);
+}
