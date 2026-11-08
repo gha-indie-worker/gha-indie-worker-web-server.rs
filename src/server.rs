@@ -128,7 +128,9 @@ impl IntakeError {
     fn response(self) -> (&'static str, &'static str) {
         match self {
             Self::Malformed => ("400 Bad Request", r#"{"error":"bad_request"}"#),
-            Self::RequestLineTooLong => ("414 URI Too Long", r#"{"error":"request_line_too_long"}"#),
+            Self::RequestLineTooLong => {
+                ("414 URI Too Long", r#"{"error":"request_line_too_long"}"#)
+            }
             Self::TooLarge => (
                 "431 Request Header Fields Too Large",
                 r#"{"error":"headers_too_large"}"#,
@@ -217,9 +219,9 @@ fn valid_host_authority(value: &str) -> bool {
     };
     !hostname.is_empty()
         && hostname.len() <= 253
-        && hostname.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')
-        })
+        && hostname
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
         && port.is_none_or(valid_port)
 }
 
