@@ -166,7 +166,7 @@ fn exact_request_line_budget_admits_boundary_and_denies_one_extra_byte() {
     request.extend_from_slice(b" HTTP/1.1\r\nHost: x\r\n\r\n");
     assert!(parse_bytes(&request).is_ok());
     request.insert(5, b'x');
-    assert_eq!(parse_bytes(&request), Err(IntakeError::TooLarge));
+    assert_eq!(parse_bytes(&request), Err(IntakeError::RequestLineTooLong));
 }
 
 #[test]
@@ -465,4 +465,105 @@ fn expired_response_deadline_prevents_writes_and_flushes() {
     );
     assert_eq!(writer.flush().unwrap_err().kind(), io::ErrorKind::TimedOut);
     drop(client);
+}
+
+#[test]
+fn malformed_percent_escapes_and_encoded_separators_are_rejected() {
+    let invalid: &[(&str, &[u8])] = &[
+        ("trailing percent", b"GET /a% HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("truncated hex", b"GET /a%A HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("nonhex", b"GET /a%GG HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("encoded slash", b"GET /a%2Fb HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("encoded backslash", b"GET /a%5cb HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("encoded percent", b"GET /a%25b HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("encoded NUL", b"GET /a%00b HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("encoded CR", b"GET /a%0db HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("encoded LF", b"GET /a%0Ab HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("encoded DEL", b"GET /a%7Fb HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("query encoded CR", b"GET /?q=%0d HTTP/1.1\r\nHost: x\r\n\r\n"),
+        ("raw backslash", b"GET /a\\b HTTP/1.1\r\nHost: x\r\n\r\n"),
+    ];
+    for &(name, request) in invalid {
+        assert_eq!(parse_bytes(request), Err(IntakeError::Malformed), "{name}");
+    }
+}
+
+#[test]
+fn encoded_unicode_and_benign_percent_triplets_remain_supported() {
+    for target in ["/caf%C3%A9", "/a%20b", "/foo%3Fbar", "/%7e", "/%2Ewell-known"] {
+        let request = format!("GET {target} HTTP/1.1\r\nHost: example.com\r\n\r\n");
+        assert_eq!(
+            parse_bytes(request.as_bytes()),
+            Ok(("GET".to_owned(), target.to_owned())),
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn percent_encoded_ascii_controls_are_all_rejected() {
+    for byte in (0u8..=31).chain(std::iter::once(127u8)) {
+        let request = format!("GET /a%{byte:02X}b HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert_eq!(
+            parse_bytes(request.as_bytes()),
+            Err(IntakeError::Malformed),
+            "percent encoded control {byte:02X}"
+        );
+    }
+}
+
+#[test]
+fn malformed_host_authorities_fail_closed() {
+    let invalid: &[(&str, &[u8])] = &[
+        ("port only", b"GET / HTTP/1.1\r\nHost: :443\r\n\r\n"),
+        ("missing port", b"GET / HTTP/1.1\r\nHost: x:\r\n\r\n"),
+        ("zero port", b"GET / HTTP/1.1\r\nHost: x:0\r\n\r\n"),
+        ("port over 65535", b"GET / HTTP/1.1\r\nHost: x:65536\r\n\r\n"),
+        ("nonnumeric port", b"GET / HTTP/1.1\r\nHost: x:http\r\n\r\n"),
+        ("double colon hostname", b"GET / HTTP/1.1\r\nHost: x:80:90\r\n\r\n"),
+        ("missing IPv6 close", b"GET / HTTP/1.1\r\nHost: [::1\r\n\r\n"),
+        ("invalid IPv6 literal", b"GET / HTTP/1.1\r\nHost: [:::]\r\n\r\n"),
+        ("IPv6 nonnumeric port", b"GET / HTTP/1.1\r\nHost: [::1]:http\r\n\r\n"),
+        ("IPv6 zero port", b"GET / HTTP/1.1\r\nHost: [::1]:0\r\n\r\n"),
+        ("IPv6 overrange port", b"GET / HTTP/1.1\r\nHost: [::1]:65536\r\n\r\n"),
+        ("IPv6 unexpected tail", b"GET / HTTP/1.1\r\nHost: [::1]junk\r\n\r\n"),
+        ("userinfo", b"GET / HTTP/1.1\r\nHost: user@x\r\n\r\n"),
+        ("path", b"GET / HTTP/1.1\r\nHost: x/a\r\n\r\n"),
+    ];
+    for &(name, request) in invalid {
+        assert_eq!(parse_bytes(request), Err(IntakeError::Malformed), "{name}");
+    }
+}
+
+#[test]
+fn valid_hostname_and_ipv6_authorities_are_preserved() {
+    for authority in ["localhost", "example.com:443", "127.0.0.1:80", "[::1]", "[::1]:8081"] {
+        let request = format!("GET /readyz HTTP/1.1\r\nHost: {authority}\r\n\r\n");
+        assert_eq!(
+            parse_bytes(request.as_bytes()),
+            Ok(("GET".to_owned(), "/readyz".to_owned())),
+            "{authority}"
+        );
+    }
+}
+
+#[test]
+fn oversize_request_line_responds_414_but_large_headers_respond_431() {
+    let mut long_start = b"GET /".to_vec();
+    long_start.extend(vec![b'a'; MAX_REQUEST_LINE_BYTES]);
+    long_start.extend_from_slice(b" HTTP/1.1\r\nHost: x\r\n\r\n");
+    let line_response = raw_exchange(&long_start);
+    assert!(
+        line_response.starts_with("HTTP/1.1 414 URI Too Long\r\n"),
+        "{line_response}"
+    );
+
+    let mut long_header = b"GET / HTTP/1.1\r\nHost: x\r\nX-Name: ".to_vec();
+    long_header.extend(vec![b'a'; MAX_HEADER_BYTES]);
+    long_header.extend_from_slice(b"\r\n\r\n");
+    let header_response = raw_exchange(&long_header);
+    assert!(
+        header_response.starts_with("HTTP/1.1 431 Request Header Fields Too Large\r\n"),
+        "{header_response}"
+    );
 }
