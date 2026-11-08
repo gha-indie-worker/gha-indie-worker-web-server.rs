@@ -463,9 +463,6 @@ fn expired_response_deadline_prevents_writes_and_flushes() {
         writer.write(b"hello").unwrap_err().kind(),
         io::ErrorKind::TimedOut
     );
-    assert_eq!(
-        writer.flush().unwrap_err().kind(),
-        io::ErrorKind::TimedOut
-    );
+    assert_eq!(writer.flush().unwrap_err().kind(), io::ErrorKind::TimedOut);
     drop(client);
 }
