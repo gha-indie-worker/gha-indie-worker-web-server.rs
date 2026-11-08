@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - src/server.rs
+      - src/server_adversarial_tests.rs
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/web-http-admission.yml
