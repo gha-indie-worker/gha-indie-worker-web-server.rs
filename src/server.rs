@@ -112,6 +112,7 @@ impl Read for DeadlineRead {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum IntakeError {
     Malformed,
+    RequestLineTooLong,
     TooLarge,
     TimedOut,
 }
@@ -127,6 +128,7 @@ impl IntakeError {
     fn response(self) -> (&'static str, &'static str) {
         match self {
             Self::Malformed => ("400 Bad Request", r#"{"error":"bad_request"}"#),
+            Self::RequestLineTooLong => ("414 URI Too Long", r#"{"error":"request_line_too_long"}"#),
             Self::TooLarge => (
                 "431 Request Header Fields Too Large",
                 r#"{"error":"headers_too_large"}"#,
@@ -153,8 +155,82 @@ fn read_crlf_line(reader: &mut impl BufRead, limit: usize) -> Result<String, Int
     String::from_utf8(bytes).map_err(|_| IntakeError::Malformed)
 }
 
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+// Validate percent escapes before extracting a path, so downstream layers
+// cannot disagree about encoded controls, separators or double-decoding.
+fn valid_request_target(target: &str) -> bool {
+    let mut bytes = target.bytes();
+    while let Some(byte) = bytes.next() {
+        if !byte.is_ascii_graphic() || matches!(byte, b'#' | b'\\') {
+            return false;
+        }
+        if byte == b'%' {
+            let Some(high) = bytes.next().and_then(hex_nibble) else {
+                return false;
+            };
+            let Some(low) = bytes.next().and_then(hex_nibble) else {
+                return false;
+            };
+            let decoded = (high << 4) | low;
+            if decoded.is_ascii_control() || matches!(decoded, b'/' | b'\\' | b'%') {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn valid_port(port: &str) -> bool {
+    !port.is_empty()
+        && port.len() <= 5
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && port.parse::<u16>().is_ok_and(|number| number != 0)
+}
+
+// A Host field is a hostname or a bracketed valid IPv6 literal, optionally
+// followed by a nonzero numeric port, never an arbitrary URI authority.
+fn valid_host_authority(value: &str) -> bool {
+    let host = value.trim();
+    if host.is_empty() {
+        return false;
+    }
+    if let Some(rest) = host.strip_prefix('[') {
+        let Some((ip, suffix)) = rest.split_once(']') else {
+            return false;
+        };
+        if ip.parse::<std::net::Ipv6Addr>().is_err() {
+            return false;
+        }
+        return suffix.is_empty() || suffix.strip_prefix(':').is_some_and(valid_port);
+    }
+    let (hostname, port) = match host.rsplit_once(':') {
+        Some((hostname, port)) => (hostname, Some(port)),
+        None => (host, None),
+    };
+    !hostname.is_empty()
+        && hostname.len() <= 253
+        && hostname.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_')
+        })
+        && port.is_none_or(valid_port)
+}
+
 fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeError> {
-    let request_line = read_crlf_line(reader, MAX_REQUEST_LINE_BYTES)?;
+    let request_line = read_crlf_line(reader, MAX_REQUEST_LINE_BYTES).map_err(|error| {
+        if error == IntakeError::TooLarge {
+            IntakeError::RequestLineTooLong
+        } else {
+            error
+        }
+    })?;
     // Strict origin-form grammar: exactly two SP separators. Treating tabs
     // and repeated whitespace as separators creates parser disagreements with
     // intermediate HTTP components (request-smuggling ambiguity).
@@ -173,7 +249,7 @@ fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeEr
         || !method.bytes().all(|b| b.is_ascii_alphabetic())
         // Raw Unicode, fragments, and ASCII controls must be encoded before
         // being placed in an HTTP/1.x request target.
-        || !target.bytes().all(|b| b.is_ascii_graphic() && b != b'#')
+        || !valid_request_target(target)
     {
         return Err(IntakeError::Malformed);
     }
@@ -200,13 +276,7 @@ fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeEr
             return Err(IntakeError::Malformed);
         }
         if name.eq_ignore_ascii_case("host") {
-            let host = value.trim();
-            if host_seen
-                || host.is_empty()
-                || host.bytes().any(|b| {
-                    !b.is_ascii_graphic() || matches!(b, b',' | b'@' | b'/' | b'\\' | b'#')
-                })
-            {
+            if host_seen || !valid_host_authority(value) {
                 return Err(IntakeError::Malformed);
             }
             host_seen = true;
@@ -380,7 +450,7 @@ mod tests {
         let mut long_line = b"GET /".to_vec();
         long_line.extend(vec![b'a'; MAX_REQUEST_LINE_BYTES]);
         long_line.extend_from_slice(b" HTTP/1.1\r\n\r\n");
-        assert_eq!(parse(&long_line), Err(IntakeError::TooLarge));
+        assert_eq!(parse(&long_line), Err(IntakeError::RequestLineTooLong));
 
         let mut headers = b"GET / HTTP/1.1\r\n".to_vec();
         for _ in 0..MAX_HEADER_LINES {
