@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::WebConfig;
 use crate::pages;
@@ -84,6 +84,25 @@ pub fn run(config: &WebConfig) {
             }
             Err(error) => eprintln!("web accept failed: {error}"),
         }
+    }
+}
+
+// Enforce a total request deadline, not merely an idle socket timeout:
+// a slow-drip client must not hold one of the bounded permits indefinitely.
+struct DeadlineRead {
+    stream: TcpStream,
+    until: Instant,
+}
+
+impl Read for DeadlineRead {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let remaining = self
+            .until
+            .checked_duration_since(Instant::now())
+            .filter(|duration| !duration.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "request deadline expired"))?;
+        self.stream.set_read_timeout(Some(remaining))?;
+        self.stream.read(out)
     }
 }
 
@@ -187,7 +206,10 @@ fn write_response(
 fn serve(mut stream: TcpStream) -> io::Result<()> {
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
-    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut reader = BufReader::new(DeadlineRead {
+        stream: stream.try_clone()?,
+        until: Instant::now() + READ_TIMEOUT,
+    });
     let (method, path) = match parse_request(&mut reader) {
         Ok(request) => request,
         Err(error) => {
@@ -276,4 +298,61 @@ mod tests {
         assert_eq!(active.load(Ordering::Acquire), 0);
         assert!(try_admit(&active).is_some());
     }
+
+    fn socket_round_trip(source: &[u8]) -> String {
+        use std::net::Shutdown;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let addr = listener.local_addr().expect("local address");
+        let worker = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept loopback");
+            serve(stream).expect("write response");
+        });
+        let mut client = TcpStream::connect(addr).expect("connect loopback");
+        client
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .expect("read timeout");
+        client.write_all(source).expect("write request");
+        client.shutdown(Shutdown::Write).expect("finish request");
+        let mut response = String::new();
+        client.read_to_string(&mut response).expect("read response");
+        worker.join().expect("worker thread");
+        response
+    }
+
+    #[test]
+    fn raw_socket_accepts_complete_health_and_rejects_partial_framing() {
+        let success = socket_round_trip(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert!(success.starts_with("HTTP/1.1 200 OK\r\n"), "{success}");
+        assert!(success.contains("\"ok\":true"));
+
+        let partial = socket_round_trip(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n");
+        assert!(partial.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{partial}");
+
+        let invalid = socket_round_trip(b"GET /healthz HTTP/1.1\r\nWrong-Header\r\n\r\n");
+        assert!(invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{invalid}");
+
+        let head = socket_round_trip(b"HEAD /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
+        assert!(head.ends_with("\r\n\r\n"), "{head}");
+    }
+
+    #[test]
+    fn deadline_reader_fails_even_if_peer_keeps_connection_open() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener");
+        let addr = listener.local_addr().expect("local address");
+        let client = TcpStream::connect(addr).expect("connect");
+        let (server, _) = listener.accept().expect("accept");
+        let mut expired = DeadlineRead {
+            stream: server,
+            until: Instant::now() - Duration::from_millis(1),
+        };
+        let mut buf = [0u8; 1];
+        assert_eq!(
+            expired.read(&mut buf).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        drop(client);
+    }
+
 }
