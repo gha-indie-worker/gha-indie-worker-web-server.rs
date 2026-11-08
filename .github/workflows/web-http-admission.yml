@@ -68,3 +68,25 @@ jobs:
           git checkout -- src/server.rs
           trap - EXIT
           test -z "$(git status --porcelain)"
+      - name: Negative mutation must reject normalized request-line whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          original = "    let mut parts = line.split(' ');"
+          mutant = "    let mut parts = line.split_ascii_whitespace();"
+          assert source.count(original) == 1, "expected a single strict-space request-line parser"
+          path.write_text(source.replace(original, mutant, 1))
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::request_line_requires_exact_sp_separators_and_encoded_targets -- --exact > "${RUNNER_TEMP}/line-mutant.log" 2>&1; then
+            echo "Whitespace-normalizing parser unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/line-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
