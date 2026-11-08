@@ -132,3 +132,25 @@ jobs:
           git checkout -- src/server.rs
           trap - EXIT
           test -z "$(git status --porcelain)"
+      - name: Negative mutation must catch an idle-only timeout
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          original = "        self.stream.set_read_timeout(Some(remaining))?;"
+          mutant = "        self.stream.set_read_timeout(Some(Duration::from_millis(300)))?;"
+          assert source.count(original) == 1, "expected one absolute-read-deadline check"
+          path.write_text(source.replace(original, mutant, 1))
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::slow_drip_cannot_extend_the_total_request_deadline -- --exact > "${RUNNER_TEMP}/drip-mutant.log" 2>&1; then
+            echo "Idle-only timeout mutation unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/drip-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
