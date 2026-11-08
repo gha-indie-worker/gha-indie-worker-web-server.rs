@@ -256,7 +256,10 @@ impl Write for DeadlineWrite<'_> {
 
     fn flush(&mut self) -> io::Result<()> {
         if Instant::now() >= self.until {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "response deadline expired"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "response deadline expired",
+            ));
         }
         self.stream.flush()
     }
