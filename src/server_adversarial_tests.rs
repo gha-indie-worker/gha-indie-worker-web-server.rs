@@ -687,7 +687,9 @@ fn sustained_overload_does_not_leak_permits_and_recovers_after_capacity_returns(
             .set_read_timeout(Some(Duration::from_secs(2)))
             .expect("overload read timeout");
         let mut response = String::new();
-        client.read_to_string(&mut response).expect("read overload reply");
+        client
+            .read_to_string(&mut response)
+            .expect("read overload reply");
         assert!(
             response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
             "overload request {case}: {response}"
@@ -712,10 +714,7 @@ fn sustained_overload_does_not_leak_permits_and_recovers_after_capacity_returns(
         .read_to_string(&mut recovered)
         .expect("recovered response");
     acceptor.join().expect("acceptor");
-    assert!(
-        recovered.starts_with("HTTP/1.1 200 OK\r\n"),
-        "{recovered}"
-    );
+    assert!(recovered.starts_with("HTTP/1.1 200 OK\r\n"), "{recovered}");
     // The worker may finish just after its socket is closed: wait only for
     // the local atomic permit to be released, not an arbitrary sleep.
     let until = Instant::now() + Duration::from_secs(2);
@@ -751,5 +750,8 @@ fn deterministic_request_mutations_never_panic_or_admit_control_bytes() {
             assert!(valid_request_target(&path));
         }
     }
-    assert!(accepted > 0, "mutations must exercise the admitted path too");
+    assert!(
+        accepted > 0,
+        "mutations must exercise the admitted path too"
+    );
 }
