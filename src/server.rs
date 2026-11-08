@@ -41,14 +41,10 @@ fn try_admit(active: &Arc<AtomicUsize>) -> Option<ConnectionPermit> {
 /// This is a minimal health/UI server, not a general HTTP proxy: each accepted
 /// socket has read/write deadlines, bounded header parsing and a connection
 /// admission permit that is returned on every thread exit, including panics.
-pub fn run(config: &WebConfig) {
-    let listener = match TcpListener::bind(&config.bind) {
-        Ok(listener) => listener,
-        Err(error) => {
-            eprintln!("web bind {} failed: {error}", config.bind);
-            std::process::exit(1);
-        }
-    };
+pub fn run(config: &WebConfig) -> io::Result<()> {
+    // Preserve mainline's typed startup/error contract: never terminate the
+    // whole process from a library function when binding fails.
+    let listener = TcpListener::bind(config.bind.trim())?;
 
     println!("web bind {}", config.bind);
     if let Some(base) = config.api_http_base.as_deref() {
@@ -57,11 +53,11 @@ pub fn run(config: &WebConfig) {
 
     let active = Arc::new(AtomicUsize::new(0));
     for connection in listener.incoming() {
-        match connection {
-            Ok(stream) => dispatch_connection(stream, &active),
-            Err(error) => eprintln!("web accept failed: {error}"),
-        }
+        // Accept failures are still propagated to the runtime operator. Bad
+        // *client requests* receive bounded 4xx responses inside serve().
+        dispatch_connection(connection?, &active);
     }
+    Ok(())
 }
 
 // Keep overload handling independently testable using a real TCP peer. All
@@ -263,8 +259,8 @@ fn serve(mut stream: TcpStream) -> io::Result<()> {
         ("GET" | "HEAD", "/") => ("200 OK", "text/html; charset=utf-8", pages::home::markup()),
         ("GET" | "HEAD", _) => (
             "404 Not Found",
-            "application/json",
-            r#"{"error":"not_found"}"#.to_owned(),
+            "text/plain; charset=utf-8",
+            "not found\n".to_owned(),
         ),
         _ => (
             "405 Method Not Allowed",
