@@ -143,8 +143,8 @@ jobs:
           reader_start = source.index("impl Read for DeadlineRead {")
           reader_end = source.index("#[derive(Debug", reader_start)
           reader_impl = source[reader_start:reader_end]
-          original = "self\\n            .until\\n            .checked_duration_since(Instant::now())"
-          mutant = "(Instant::now() + Duration::from_millis(300))\\n            .checked_duration_since(Instant::now())"
+          original = "self\n            .until\n            .checked_duration_since(Instant::now())"
+          mutant = "(Instant::now() + Duration::from_millis(300))\n            .checked_duration_since(Instant::now())"
           assert reader_impl.count(original) == 1, "expected exactly one absolute-read-deadline calculation"
           path.write_text(
               source[:reader_start] + reader_impl.replace(original, mutant, 1) + source[reader_end:]
