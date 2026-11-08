@@ -474,13 +474,19 @@ fn malformed_percent_escapes_and_encoded_separators_are_rejected() {
         ("truncated hex", b"GET /a%A HTTP/1.1\r\nHost: x\r\n\r\n"),
         ("nonhex", b"GET /a%GG HTTP/1.1\r\nHost: x\r\n\r\n"),
         ("encoded slash", b"GET /a%2Fb HTTP/1.1\r\nHost: x\r\n\r\n"),
-        ("encoded backslash", b"GET /a%5cb HTTP/1.1\r\nHost: x\r\n\r\n"),
+        (
+            "encoded backslash",
+            b"GET /a%5cb HTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
         ("encoded percent", b"GET /a%25b HTTP/1.1\r\nHost: x\r\n\r\n"),
         ("encoded NUL", b"GET /a%00b HTTP/1.1\r\nHost: x\r\n\r\n"),
         ("encoded CR", b"GET /a%0db HTTP/1.1\r\nHost: x\r\n\r\n"),
         ("encoded LF", b"GET /a%0Ab HTTP/1.1\r\nHost: x\r\n\r\n"),
         ("encoded DEL", b"GET /a%7Fb HTTP/1.1\r\nHost: x\r\n\r\n"),
-        ("query encoded CR", b"GET /?q=%0d HTTP/1.1\r\nHost: x\r\n\r\n"),
+        (
+            "query encoded CR",
+            b"GET /?q=%0d HTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
         ("raw backslash", b"GET /a\\b HTTP/1.1\r\nHost: x\r\n\r\n"),
     ];
     for &(name, request) in invalid {
@@ -490,7 +496,13 @@ fn malformed_percent_escapes_and_encoded_separators_are_rejected() {
 
 #[test]
 fn encoded_unicode_and_benign_percent_triplets_remain_supported() {
-    for target in ["/caf%C3%A9", "/a%20b", "/foo%3Fbar", "/%7e", "/%2Ewell-known"] {
+    for target in [
+        "/caf%C3%A9",
+        "/a%20b",
+        "/foo%3Fbar",
+        "/%7e",
+        "/%2Ewell-known",
+    ] {
         let request = format!("GET {target} HTTP/1.1\r\nHost: example.com\r\n\r\n");
         assert_eq!(
             parse_bytes(request.as_bytes()),
@@ -518,15 +530,36 @@ fn malformed_host_authorities_fail_closed() {
         ("port only", b"GET / HTTP/1.1\r\nHost: :443\r\n\r\n"),
         ("missing port", b"GET / HTTP/1.1\r\nHost: x:\r\n\r\n"),
         ("zero port", b"GET / HTTP/1.1\r\nHost: x:0\r\n\r\n"),
-        ("port over 65535", b"GET / HTTP/1.1\r\nHost: x:65536\r\n\r\n"),
+        (
+            "port over 65535",
+            b"GET / HTTP/1.1\r\nHost: x:65536\r\n\r\n",
+        ),
         ("nonnumeric port", b"GET / HTTP/1.1\r\nHost: x:http\r\n\r\n"),
-        ("double colon hostname", b"GET / HTTP/1.1\r\nHost: x:80:90\r\n\r\n"),
-        ("missing IPv6 close", b"GET / HTTP/1.1\r\nHost: [::1\r\n\r\n"),
-        ("invalid IPv6 literal", b"GET / HTTP/1.1\r\nHost: [:::]\r\n\r\n"),
-        ("IPv6 nonnumeric port", b"GET / HTTP/1.1\r\nHost: [::1]:http\r\n\r\n"),
+        (
+            "double colon hostname",
+            b"GET / HTTP/1.1\r\nHost: x:80:90\r\n\r\n",
+        ),
+        (
+            "missing IPv6 close",
+            b"GET / HTTP/1.1\r\nHost: [::1\r\n\r\n",
+        ),
+        (
+            "invalid IPv6 literal",
+            b"GET / HTTP/1.1\r\nHost: [:::]\r\n\r\n",
+        ),
+        (
+            "IPv6 nonnumeric port",
+            b"GET / HTTP/1.1\r\nHost: [::1]:http\r\n\r\n",
+        ),
         ("IPv6 zero port", b"GET / HTTP/1.1\r\nHost: [::1]:0\r\n\r\n"),
-        ("IPv6 overrange port", b"GET / HTTP/1.1\r\nHost: [::1]:65536\r\n\r\n"),
-        ("IPv6 unexpected tail", b"GET / HTTP/1.1\r\nHost: [::1]junk\r\n\r\n"),
+        (
+            "IPv6 overrange port",
+            b"GET / HTTP/1.1\r\nHost: [::1]:65536\r\n\r\n",
+        ),
+        (
+            "IPv6 unexpected tail",
+            b"GET / HTTP/1.1\r\nHost: [::1]junk\r\n\r\n",
+        ),
         ("userinfo", b"GET / HTTP/1.1\r\nHost: user@x\r\n\r\n"),
         ("path", b"GET / HTTP/1.1\r\nHost: x/a\r\n\r\n"),
     ];
@@ -537,7 +570,13 @@ fn malformed_host_authorities_fail_closed() {
 
 #[test]
 fn valid_hostname_and_ipv6_authorities_are_preserved() {
-    for authority in ["localhost", "example.com:443", "127.0.0.1:80", "[::1]", "[::1]:8081"] {
+    for authority in [
+        "localhost",
+        "example.com:443",
+        "127.0.0.1:80",
+        "[::1]",
+        "[::1]:8081",
+    ] {
         let request = format!("GET /readyz HTTP/1.1\r\nHost: {authority}\r\n\r\n");
         assert_eq!(
             parse_bytes(request.as_bytes()),
