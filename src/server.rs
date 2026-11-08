@@ -58,32 +58,36 @@ pub fn run(config: &WebConfig) {
     let active = Arc::new(AtomicUsize::new(0));
     for connection in listener.incoming() {
         match connection {
-            Ok(mut stream) => {
-                if let Some(permit) = try_admit(&active) {
-                    if let Err(error) = thread::Builder::new()
-                        .name("giw-web-client".into())
-                        .spawn(move || {
-                            let _permit = permit;
-                            if let Err(error) = serve(stream) {
-                                eprintln!("web connection ended: {error}");
-                            }
-                        })
-                    {
-                        eprintln!("web client thread admission failed: {error}");
-                    }
-                } else {
-                    let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
-                    let _ = write_response(
-                        &mut stream,
-                        "503 Service Unavailable",
-                        "application/json",
-                        r#"{"error":"at_capacity"}"#,
-                        false,
-                    );
-                }
-            }
+            Ok(stream) => dispatch_connection(stream, &active),
             Err(error) => eprintln!("web accept failed: {error}"),
         }
+    }
+}
+
+// Keep overload handling independently testable using a real TCP peer. All
+// slots are accounted before spawning and returned even on spawn failure.
+fn dispatch_connection(mut stream: TcpStream, active: &Arc<AtomicUsize>) {
+    if let Some(permit) = try_admit(active) {
+        if let Err(error) = thread::Builder::new()
+            .name("giw-web-client".into())
+            .spawn(move || {
+                let _permit = permit;
+                if let Err(error) = serve(stream) {
+                    eprintln!("web connection ended: {error}");
+                }
+            })
+        {
+            eprintln!("web client thread admission failed: {error}");
+        }
+    } else {
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+        let _ = write_response(
+            &mut stream,
+            "503 Service Unavailable",
+            "application/json",
+            r#"{"error":"at_capacity"}"#,
+            false,
+        );
     }
 }
 
@@ -163,6 +167,8 @@ fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeEr
 
     let mut header_bytes = 0usize;
     let mut complete = false;
+    let mut host_seen = false;
+    let mut content_length_seen = false;
     for _ in 0..MAX_HEADER_LINES {
         let line = read_crlf_line(reader, MAX_HEADER_BYTES.saturating_sub(header_bytes))?;
         header_bytes += line.len();
@@ -171,15 +177,40 @@ fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeEr
             break;
         }
         let header = line.trim_end_matches("\r\n");
-        let (name, _) = header.split_once(':').ok_or(IntakeError::Malformed)?;
+        let (name, value) = header.split_once(':').ok_or(IntakeError::Malformed)?;
         if name.is_empty()
             || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            || value.bytes().any(|b| b == 0 || b == b'\r' || b == b'\n' || b == 0x7f
+                || (b < 0x20 && b != b'\t'))
         {
             return Err(IntakeError::Malformed);
+        }
+        if name.eq_ignore_ascii_case("host") {
+            if host_seen || value.trim().is_empty() {
+                return Err(IntakeError::Malformed);
+            }
+            host_seen = true;
+        }
+        // This health/UI server never reads bodies. Reject ambiguous framing
+        // rather than accidentally treating a second HTTP request as headers.
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err(IntakeError::Malformed);
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if content_length_seen || value.trim() != "0" {
+                return Err(IntakeError::Malformed);
+            }
+            content_length_seen = true;
         }
     }
     if !complete {
         return Err(IntakeError::TooLarge);
+    }
+    if version == "HTTP/1.1" && !host_seen {
+        return Err(IntakeError::Malformed);
+    }
+    if target.bytes().any(|b| b == 0 || b == 0x7f || b < 0x20) {
+        return Err(IntakeError::Malformed);
     }
 
     Ok((method.to_owned(), target.split('?').next().unwrap_or_default().to_owned()))
@@ -356,3 +387,8 @@ mod tests {
     }
 
 }
+
+// Keep the adversarial matrix separate from the small baseline test module.
+#[cfg(test)]
+#[path = "server_adversarial_tests.rs"]
+mod server_adversarial_tests;
