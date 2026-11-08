@@ -90,3 +90,45 @@ jobs:
           git checkout -- src/server.rs
           trap - EXIT
           test -z "$(git status --porcelain)"
+      - name: Negative mutation must reject encoded control bypass
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          original = "        || !valid_request_target(target)"
+          assert source.count(original) == 1, "expected one encoded-target gate"
+          path.write_text(source.replace(original, "        || false", 1))
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::malformed_percent_escapes_and_encoded_separators_are_rejected -- --exact > "${RUNNER_TEMP}/encoded-mutant.log" 2>&1; then
+            echo "Encoded-target bypass unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/encoded-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
+      - name: Negative mutation must reject malformed Host authority bypass
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/server.rs")
+          source = path.read_text()
+          original = "if host_seen || !valid_host_authority(value) {"
+          assert source.count(original) == 1, "expected one Host authority gate"
+          path.write_text(source.replace(original, "if host_seen || false {", 1))
+          PY
+          trap 'git checkout -- src/server.rs' EXIT
+          if cargo test --locked --lib server::server_adversarial_tests::malformed_host_authorities_fail_closed -- --exact > "${RUNNER_TEMP}/authority-mutant.log" 2>&1; then
+            echo "Host authority bypass unexpectedly passed" >&2
+            exit 1
+          fi
+          grep -F 'test result: FAILED. 0 passed; 1 failed' "${RUNNER_TEMP}/authority-mutant.log"
+          git checkout -- src/server.rs
+          trap - EXIT
+          test -z "$(git status --porcelain)"
