@@ -8,12 +8,32 @@ use crate::config::WebConfig;
 use crate::pages;
 
 fn response_for_path(path: &str) -> (&'static str, &'static str, String) {
-    if path == "/readyz" {
+    if matches!(path, "/readyz" | "/health" | "/healthz") {
         return (
             "200 OK",
             "application/json",
             "{\"ok\":true,\"service\":\"gha-indie-worker-web-server\"}".to_owned(),
         );
+    }
+
+    if path == "/api/runs" {
+        let evidence = std::env::var_os("GHA_INDIE_WORKER_STATUS_FILE")
+            .and_then(|path| {
+                let file = std::fs::File::open(path).ok()?;
+                let mut body = String::new();
+                file.take(1024 * 1024 + 1).read_to_string(&mut body).ok()?;
+                Some(body)
+            })
+            .filter(|body| body.len() <= 1024 * 1024)
+            .filter(|body| serde_json::from_str::<serde_json::Value>(body).is_ok());
+        return match evidence {
+            Some(body) => ("200 OK", "application/json", body),
+            None => (
+                "503 Service Unavailable",
+                "application/json",
+                "{\"error\":\"execution evidence unavailable\"}".into(),
+            ),
+        };
     }
 
     if path == "/" {
@@ -40,9 +60,26 @@ fn handle_http_connection(stream: &mut TcpStream) -> std::io::Result<()> {
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
         .unwrap_or("/");
-    let (status, content_type, body) = response_for_path(path);
+    let method = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next());
+    let (status, content_type, body) = if matches!(method, Some("GET" | "HEAD")) {
+        response_for_path(path)
+    } else {
+        (
+            "405 Method Not Allowed",
+            "text/plain",
+            "read-only service\n".into(),
+        )
+    };
+    let payload = if method == Some("HEAD") {
+        ""
+    } else {
+        body.as_str()
+    };
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n{payload}",
         body.len()
     );
 
@@ -57,7 +94,10 @@ pub fn run(config: &WebConfig) -> std::io::Result<()> {
 
     for connection in listener.incoming() {
         let mut stream = connection?;
-        handle_http_connection(&mut stream)?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
+        // A disconnected or slow client must not terminate the server.
+        let _ = handle_http_connection(&mut stream);
     }
 
     return Ok(());

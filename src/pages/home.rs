@@ -1,5 +1,15 @@
 #![forbid(unsafe_code)]
 
 pub fn markup() -> String {
-    "<h1>GHA Indie Worker</h1><p>Maud/HTMX web surface. No React.</p>".into()
+    r##"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IndieBuild — local execution</title><style>
+:root{font-family:ui-sans-serif,system-ui,sans-serif;color:#e8ede8;background:#111713}body{max-width:1050px;margin:0 auto;padding:54px 24px}a{color:#9de1ad}header{border-bottom:1px solid #344137;padding-bottom:32px}small,.muted{color:#a4b3a7}h1{font-size:clamp(36px,6vw,64px);letter-spacing:-.05em;margin:16px 0}h2{font-size:20px}p{line-height:1.6}.tag{border:1px solid #55765c;border-radius:99px;padding:6px 12px;font-size:13px}section{margin-top:36px}.run{padding:22px 0;border-bottom:1px solid #344137;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}.state{font-family:ui-monospace,monospace}.success{color:#9de1ad}.failure{color:#ffa390}code{font-family:ui-monospace,monospace;font-size:13px}footer{margin-top:48px;color:#a4b3a7;font-size:13px}
+</style></head><body><header><span class="tag">MACBOOK COMPUTE · GITHUB ACTIONS</span><h1>Build here.<br>Report there.</h1><p>Repository workflows execute on disposable local runners. GitHub schedules the jobs and records their results.</p></header>
+<section><h2>Latest verification runs</h2><p id="updated" class="muted">Loading recorded execution evidence…</p><div id="runs"></div></section>
+<section><h2>One workflow, your compute</h2><p>IndieBuild runners receive job instructions from GitHub. Each job gets a fresh container in the MacBook’s Linux VM. The runner exits after reporting its result.</p><p class="muted">A failed test stays failed. A queued job is not a successful build. The evidence below links to the full source revision and executed steps.</p></section><footer>IndieBuild · No hosted compute is used for the listed IndieBuild jobs. Artifact and cache storage have separate billing.</footer>
+<script>
+async function refresh(){try{const r=await fetch('/api/runs',{cache:'no-store'});if(!r.ok)throw Error('Evidence unavailable');const data=await r.json();document.querySelector('#updated').textContent='Evidence refreshed '+data.updatedAt;const root=document.querySelector('#runs');root.replaceChildren();for(const run of data.runs){const row=document.createElement('article');row.className='run';const info=document.createElement('div');const title=document.createElement('a');title.textContent=run.repository;title.href=run.url;title.rel='noreferrer';info.append(title,document.createElement('br'));const sha=document.createElement('code');sha.textContent=run.headSha;info.append(sha);const state=document.createElement('span');state.className='state '+(run.conclusion||'');state.textContent=run.conclusion||run.status;row.append(info,state);root.append(row)}if(!data.runs.length)root.textContent='No execution evidence recorded yet.'}catch(e){document.querySelector('#updated').textContent='Execution evidence is unavailable; no success is inferred.'}}
+refresh();setInterval(refresh,30000);
+</script></body></html>"##.to_owned()
 }
