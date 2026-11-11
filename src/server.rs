@@ -120,7 +120,10 @@ impl IntakeError {
     fn response(self) -> (&'static str, &'static str) {
         match self {
             Self::Malformed => ("400 Bad Request", r#"{"error":"bad_request"}"#),
-            Self::TooLarge => ("431 Request Header Fields Too Large", r#"{"error":"headers_too_large"}"#),
+            Self::TooLarge => (
+                "431 Request Header Fields Too Large",
+                r#"{"error":"headers_too_large"}"#,
+            ),
             Self::TimedOut => ("408 Request Timeout", r#"{"error":"request_timeout"}"#),
         }
     }
@@ -145,7 +148,9 @@ fn read_crlf_line(reader: &mut impl BufRead, limit: usize) -> Result<String, Int
 
 fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeError> {
     let request_line = read_crlf_line(reader, MAX_REQUEST_LINE_BYTES)?;
-    let mut parts = request_line.trim_end_matches("\r\n").split_ascii_whitespace();
+    let mut parts = request_line
+        .trim_end_matches("\r\n")
+        .split_ascii_whitespace();
     let method = parts.next().ok_or(IntakeError::Malformed)?;
     let target = parts.next().ok_or(IntakeError::Malformed)?;
     let version = parts.next().ok_or(IntakeError::Malformed)?;
@@ -172,8 +177,9 @@ fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeEr
         let (name, value) = header.split_once(':').ok_or(IntakeError::Malformed)?;
         if name.is_empty()
             || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-            || value.bytes().any(|b| b == 0 || b == b'\r' || b == b'\n' || b == 0x7f
-                || (b < 0x20 && b != b'\t'))
+            || value.bytes().any(|b| {
+                b == 0 || b == b'\r' || b == b'\n' || b == 0x7f || (b < 0x20 && b != b'\t')
+            })
         {
             return Err(IntakeError::Malformed);
         }
@@ -205,7 +211,10 @@ fn parse_request(reader: &mut impl BufRead) -> Result<(String, String), IntakeEr
         return Err(IntakeError::Malformed);
     }
 
-    Ok((method.to_owned(), target.split('?').next().unwrap_or_default().to_owned()))
+    Ok((
+        method.to_owned(),
+        target.split('?').next().unwrap_or_default().to_owned(),
+    ))
 }
 
 fn write_response(
@@ -282,11 +291,26 @@ mod tests {
             parse(b"GET /healthz?probe=1 HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap(),
             ("GET".to_owned(), "/healthz".to_owned())
         );
-        assert_eq!(parse(b"GET /healthz HTTP/1.1\r\nHost: x\r\n"), Err(IntakeError::Malformed));
-        assert_eq!(parse(b"GET /healthz HTTP/1.1\r\nHost: x"), Err(IntakeError::Malformed));
-        assert_eq!(parse(b"GET /healthz HTTP/1.1\r\nNoColon\r\n\r\n"), Err(IntakeError::Malformed));
-        assert_eq!(parse(b"GET /healthz HTTP/2.0\r\n\r\n"), Err(IntakeError::Malformed));
-        assert_eq!(parse(b"GET https://example.com/ HTTP/1.1\r\n\r\n"), Err(IntakeError::Malformed));
+        assert_eq!(
+            parse(b"GET /healthz HTTP/1.1\r\nHost: x\r\n"),
+            Err(IntakeError::Malformed)
+        );
+        assert_eq!(
+            parse(b"GET /healthz HTTP/1.1\r\nHost: x"),
+            Err(IntakeError::Malformed)
+        );
+        assert_eq!(
+            parse(b"GET /healthz HTTP/1.1\r\nNoColon\r\n\r\n"),
+            Err(IntakeError::Malformed)
+        );
+        assert_eq!(
+            parse(b"GET /healthz HTTP/2.0\r\n\r\n"),
+            Err(IntakeError::Malformed)
+        );
+        assert_eq!(
+            parse(b"GET https://example.com/ HTTP/1.1\r\n\r\n"),
+            Err(IntakeError::Malformed)
+        );
     }
 
     #[test]
@@ -350,10 +374,16 @@ mod tests {
         assert!(success.contains("\"ok\":true"));
 
         let partial = socket_round_trip(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n");
-        assert!(partial.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{partial}");
+        assert!(
+            partial.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{partial}"
+        );
 
         let invalid = socket_round_trip(b"GET /healthz HTTP/1.1\r\nWrong-Header\r\n\r\n");
-        assert!(invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{invalid}");
+        assert!(
+            invalid.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "{invalid}"
+        );
 
         let head = socket_round_trip(b"HEAD /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
         assert!(head.starts_with("HTTP/1.1 200 OK\r\n"), "{head}");
@@ -377,7 +407,6 @@ mod tests {
         );
         drop(client);
     }
-
 }
 
 // Keep the adversarial matrix separate from the small baseline test module.
