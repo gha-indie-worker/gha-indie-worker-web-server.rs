@@ -4,4 +4,3 @@
 pub struct TcpTransport {
     pub bind: String,
 }
-

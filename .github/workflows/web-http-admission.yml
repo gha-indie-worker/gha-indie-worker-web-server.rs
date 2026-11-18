@@ -50,14 +50,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("src/server.rs")
-          source = path.read_text()
-          original = '    if version == "HTTP/1.1" && !host_seen {'
-          assert source.count(original) == 1, "expected a single Host admission guard"
-          path.write_text(source.replace(original, '    if false {', 1))
-          PY
+          guard='    if version == "HTTP/1.1" && !host_seen {'
+          test "$(grep -Fxc "$guard" src/server.rs)" -eq 1
+          sed -i 's/if version == "HTTP\/1\.1" \&\& !host_seen {/if false {/' src/server.rs
+          ! grep -Fq "$guard" src/server.rs
+          grep -Fq '    if false {' src/server.rs
           trap 'git checkout -- src/server.rs' EXIT
           if cargo test --locked --lib server::server_adversarial_tests::rejects_host_ambiguity_and_body_framing_that_is_never_consumed -- --exact > "${RUNNER_TEMP}/http-mutant.log" 2>&1; then
             echo "Host-negative mutation unexpectedly passed" >&2

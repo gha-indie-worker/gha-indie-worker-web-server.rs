@@ -9,4 +9,3 @@ pub enum WebError {
     #[error("unavailable")]
     Unavailable,
 }
-

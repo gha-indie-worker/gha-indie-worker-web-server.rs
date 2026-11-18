@@ -6,4 +6,3 @@
 pub struct ReadOnlyProjection {
     pub rows: usize,
 }
-
