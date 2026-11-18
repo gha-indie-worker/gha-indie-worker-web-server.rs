@@ -8,7 +8,6 @@
 .env.*
 !.env.example
 *.sqlite
-Cargo.lock
 
 
 
@@ -27,3 +26,7 @@ Cargo.lock
 
 # typespec-json-schema-validator comparison evidence (generated; never an authority)
 .typespec-json-schema-validator/
+
+# Zed package-manager runtime state and materialized dependencies
+.zed/
+zed_modules/
