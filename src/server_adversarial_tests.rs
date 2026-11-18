@@ -22,9 +22,13 @@ fn raw_exchange(bytes: &[u8]) -> String {
         .set_read_timeout(Some(Duration::from_secs(4)))
         .expect("timeout on test peer");
     client.write_all(bytes).expect("send request");
-    client.shutdown(Shutdown::Write).expect("signal end of input");
+    client
+        .shutdown(Shutdown::Write)
+        .expect("signal end of input");
     let mut response = String::new();
-    client.read_to_string(&mut response).expect("receive response");
+    client
+        .read_to_string(&mut response)
+        .expect("receive response");
     worker.join().expect("join HTTP worker");
     response
 }
@@ -33,13 +37,21 @@ fn raw_exchange(bytes: &[u8]) -> String {
 fn accepts_http_10_and_case_insensitive_host_without_implicit_bodies() {
     let cases: &[(&[u8], &str, &str)] = &[
         (b"GET / HTTP/1.0\r\n\r\n", "GET", "/"),
-        (b"GET /healthz?probe=1 HTTP/1.1\r\nhOsT: localhost\r\n\r\n", "GET", "/healthz"),
+        (
+            b"GET /healthz?probe=1 HTTP/1.1\r\nhOsT: localhost\r\n\r\n",
+            "GET",
+            "/healthz",
+        ),
         (
             b"HEAD /readyz?x=1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n",
             "HEAD",
             "/readyz",
         ),
-        (b"POST /healthz HTTP/1.1\r\nHost: x\r\n\r\n", "POST", "/healthz"),
+        (
+            b"POST /healthz HTTP/1.1\r\nHost: x\r\n\r\n",
+            "POST",
+            "/healthz",
+        ),
     ];
     for &(source, method, path) in cases {
         let parsed = parse_bytes(source).expect("valid HTTP framing");
@@ -81,18 +93,48 @@ fn rejects_host_ambiguity_and_body_framing_that_is_never_consumed() {
 #[test]
 fn rejects_invalid_controls_in_target_and_header_values() {
     let invalid: &[(&str, &[u8])] = &[
-        ("NUL in target", b"GET /health\0z HTTP/1.1\r\nHost: x\r\n\r\n"),
+        (
+            "NUL in target",
+            b"GET /health\0z HTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
         ("NUL in Host", b"GET / HTTP/1.1\r\nHost: x\0y\r\n\r\n"),
-        ("DEL in header", b"GET / HTTP/1.1\r\nHost: x\r\nX: a\x7fb\r\n\r\n"),
-        ("bare carriage return", b"GET / HTTP/1.1\r\nHost: x\r\nX: a\rb\r\n\r\n"),
-        ("control character", b"GET / HTTP/1.1\r\nHost: x\r\nX: a\x01b\r\n\r\n"),
-        ("invalid UTF-8", b"GET / HTTP/1.1\r\nHost: x\r\nX: \xff\r\n\r\n"),
-        ("obsolete header folding", b"GET / HTTP/1.1\r\nHost: x\r\n X: y\r\n\r\n"),
-        ("bad header field name", b"GET / HTTP/1.1\r\nHost: x\r\nX bad: y\r\n\r\n"),
-        ("missing header colon", b"GET / HTTP/1.1\r\nHost: x\r\nXYZ\r\n\r\n"),
+        (
+            "DEL in header",
+            b"GET / HTTP/1.1\r\nHost: x\r\nX: a\x7fb\r\n\r\n",
+        ),
+        (
+            "bare carriage return",
+            b"GET / HTTP/1.1\r\nHost: x\r\nX: a\rb\r\n\r\n",
+        ),
+        (
+            "control character",
+            b"GET / HTTP/1.1\r\nHost: x\r\nX: a\x01b\r\n\r\n",
+        ),
+        (
+            "invalid UTF-8",
+            b"GET / HTTP/1.1\r\nHost: x\r\nX: \xff\r\n\r\n",
+        ),
+        (
+            "obsolete header folding",
+            b"GET / HTTP/1.1\r\nHost: x\r\n X: y\r\n\r\n",
+        ),
+        (
+            "bad header field name",
+            b"GET / HTTP/1.1\r\nHost: x\r\nX bad: y\r\n\r\n",
+        ),
+        (
+            "missing header colon",
+            b"GET / HTTP/1.1\r\nHost: x\r\nXYZ\r\n\r\n",
+        ),
         ("bad protocol", b"GET / HTTP/2.0\r\nHost: x\r\n\r\n"),
-        ("absolute-form target", b"GET http://example.test/ HTTP/1.1\r\nHost: x\r\n\r\n"),
-        ("extra start-line token", b"GET / HTTP/1.1 ignored\r\nHost: x\r\n\r\n"),
+        (
+            "absolute-form target",
+            b"GET http://example.test/ HTTP/1.1\r\nHost: x\r\n\r\n",
+        ),
+        (
+            "extra start-line token",
+            b"GET / HTTP/1.1 ignored\r\nHost: x\r\n\r\n",
+        ),
         ("LF-only request", b"GET / HTTP/1.1\nHost: x\n\n"),
         ("incomplete header block", b"GET / HTTP/1.1\r\nHost: x\r\n"),
     ];
@@ -173,7 +215,10 @@ fn raw_sockets_return_specific_failure_status_and_never_reflect_bad_input() {
     ];
     for &(request, expected) in cases {
         let response = raw_exchange(request);
-        assert!(response.starts_with(&format!("HTTP/1.1 {expected}\r\n")), "{response}");
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {expected}\r\n")),
+            "{response}"
+        );
         assert!(response.contains("connection: close\r\n"));
         assert!(!response.contains("Transfer-Encoding: chunked"));
     }
@@ -216,7 +261,10 @@ fn actual_tcp_overload_returns_503_without_spawning_worker() {
     let mut response = String::new();
     client.read_to_string(&mut response).expect("read overload");
     worker.join().expect("join");
-    assert!(response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"), "{response}");
+    assert!(
+        response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+        "{response}"
+    );
     assert_eq!(active.load(Ordering::Acquire), MAX_CONCURRENT_CLIENTS);
     drop(permits);
     assert_eq!(active.load(Ordering::Acquire), 0);
@@ -238,7 +286,9 @@ fn contending_threads_never_admit_more_than_the_budget() {
         workers.push(thread::spawn(move || {
             start.wait();
             let permit = try_admit(&active);
-            sender.send(permit.is_some()).expect("send admission result");
+            sender
+                .send(permit.is_some())
+                .expect("send admission result");
             release.wait();
             drop(permit);
         }));
@@ -292,7 +342,6 @@ fn short_deadline_rejects_open_partial_socket_without_waiting_for_idle_timeout()
     drop(client);
 }
 
-
 #[test]
 fn startup_preserves_mainline_result_error_contract() {
     let startup: fn(&WebConfig) -> io::Result<()> = run;
@@ -301,13 +350,19 @@ fn startup_preserves_mainline_result_error_contract() {
         api_http_base: None,
         database_url: None,
     };
-    assert!(startup(&config).is_err(), "bind failure must return Result::Err");
+    assert!(
+        startup(&config).is_err(),
+        "bind failure must return Result::Err"
+    );
 }
 
 #[test]
 fn missing_route_keeps_mainline_plain_text_404_contract() {
     let response = raw_exchange(b"GET /unknown HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"), "{response}");
+    assert!(
+        response.starts_with("HTTP/1.1 404 Not Found\r\n"),
+        "{response}"
+    );
     assert!(response.contains("content-type: text/plain; charset=utf-8\r\n"));
     assert!(response.ends_with("\r\n\r\nnot found\n"), "{response}");
 }
